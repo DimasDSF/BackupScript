@@ -1,4 +1,3 @@
-BackupScript/__pycache__/
-BackupScript/bkp/
-BackupScript/.idea/
-BackupScript/config.json
+BkpScr/__pycache__/
+.idea/
+BkpScr/config.json
