@@ -8,6 +8,7 @@ import math
 import socket
 import urllib.request
 import argparse
+import locale
 
 HARD_CONFIG_VER = 1
 LATEST_VER_DATA_URL = "https://raw.githubusercontent.com/DimasDSF/BackupScript/master/bkpScr/version.json"
@@ -129,6 +130,36 @@ def is_latest_version():
         return [False, vdata]
     else:
         return None
+
+def dl_update():
+    Github_Raw_links = [
+        {
+            "url": LATEST_VER_DATA_URL,
+            "type": "json",
+            "name": "version.json"
+        },
+        {
+            "url": "https://raw.githubusercontent.com/DimasDSF/BackupScript/master/bkpScr/backup.py",
+            "type": "py",
+            "name": "backup.py"
+        }
+    ]
+    try:
+        for filedata in Github_Raw_links:
+            with urllib.request.urlopen(filedata['url']) as dld_data:
+                if filedata['type'] == "json":
+                    j = json.loads(dld_data.read().decode())
+                    with open(os.path.join(os.path.dirname(os.path.realpath(__file__)), filedata['name']), "w+") as dl:
+                        json.dump(j, dl, indent=4)
+                elif filedata['type'] == "py":
+                    with open(os.path.join(os.path.dirname(os.path.realpath(__file__)), filedata['name']), "w+") as dl:
+                        text = dld_data.read().decode(encoding=locale.getdefaultlocale()[1])
+                        dl.write(text)
+    except Exception as e:
+        print("Update Failed due to an Exception: {0} / {1}".format(type(e).__name__, e.args))
+    else:
+        python = sys.executable
+        os.execl(python, python, *sys.argv)
 
 log = []
 errors_list = []
@@ -420,6 +451,9 @@ def start_menu():
                 print("This is the latest version")
             else:
                 print("!OUTDATED Version! Latest: {0}/{1}. Built: {2}".format(lvd[1].get("version"), lvd[1].get("coderev"), lvd[1].get("buildtime")))
+                print('Press any key to download an update.')
+                os.system('pause >nul')
+                dl_update()
     os.system("pause >nul")
     add_log("Starting backup process")
     time.sleep(2)
