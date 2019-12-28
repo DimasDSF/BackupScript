@@ -88,6 +88,7 @@ bkp_root = config['local_backup_root_folder']
 shift_tz = datetime.timezone(datetime.timedelta(hours=config['tz'].get('hours', 0), minutes=config['tz'].get('minutes', 0)))
 path_reduction = config.get('path_reduction', None)
 path_reduction = None if path_reduction == 0 else path_reduction
+notzformat = '{:%d-%m-%Y %H:%M:%S}'
 
 #####################################################
 # Version Check
@@ -176,11 +177,12 @@ file_changes = {
     "folder": []
 }
 file_list = list()
-def add_log(log_text: str, end: str = "\n", wait_time: float = 0):
-    print(log_text, end=end)
-    if "\r" in end:
-        sys.stdout.flush()
-    log.append("\n{0}: {1}".format(str(get_cur_dt()), log_text))
+def add_log(log_text: str, end: str = "\n", should_print=True, wait_time: float = 0):
+    if should_print:
+        print(log_text, end=end)
+        if "\r" in end:
+            sys.stdout.flush()
+    log.append("\n{0}: {1}".format(notzformat.format(get_cur_dt()), log_text))
     if wait_time != 0:
         time.sleep(wait_time)
 
@@ -384,7 +386,7 @@ def process():
                                                                                        len(list(filter(lambda x: x['type'] == "remove", file_list))) + len(list(filter(lambda x: x['type'] == "removef", file_list))),
                                                                                        format_bytes(bytes_to_modify)))
         dinfo = shutil.disk_usage(os.path.realpath('/' if os.name == 'nt' else __file__))
-        print("This will require approximately {0} of space. {1} Available from {2}".format(format_bytes(space_req), format_bytes(dinfo.free), format_bytes(dinfo.total)))
+        print("This will {3} approximately {0} of space. {1} Available from {2}".format(format_bytes(abs(space_req)), format_bytes(dinfo.free), format_bytes(dinfo.total), "require" if space_req >= 0 else "free up"))
         os.system("pause")
         if space_req > dinfo.free:
             print("Not Enough Space to finish the backup process. Exiting.")
@@ -402,7 +404,7 @@ def process():
             try:
                 clear_terminal()
                 print("In Progress | Ctrl+C to cancel.")
-                add_log("Folder:{4}\nFile:{5}\n{0} / {1} done. DiffSize:{9}\n{6}{2}%\n{7}{8}{3}".format(num,
+                print("Folder:{4}\nFile:{5}\n{0} / {1} done. DiffSize:{9}\n{6}{2}%\n{7}{8}{3}".format(num,
                                                                                             len(file_list),
                                                                                             round(num * 100 / len(file_list), 2),
                                                                                             "\n\n{} errors".format(file_change_errors) if file_change_errors != 0 else "",
@@ -412,12 +414,17 @@ def process():
                                                                                             get_progress_bar(round(((abs(bytes_done) / bytes_to_modify) if bytes_to_modify != 0 else 1) * 100, 2)),
                                                                                             "{0}/{1}".format(format_bytes(bytes_done), format_bytes(bytes_to_modify)),
                                                                                             format_bytes(file['diffsize'])))
+                add_log("Folder:{2}\nFile:{3}\n{0} / {1} done. DiffSize:{4}".format(num,
+                                                                                    len(file_list),
+                                                                                    os.path.split(file['sfile'])[0],
+                                                                                    os.path.split(file['sfile'])[1],
+                                                                                    format_bytes(file['diffsize'])), should_print=False)
                 if file['type'] == "update":
                     bytes_done += file['diffsize']
                     shutil.copy2(file['sfile'], os.path.dirname(file['dfilepath']))
                     add_file_change('update', "Updated | {0} | {1} -> {2}".format(file['sfile'],
-                                                                                          get_modification_dt_from_file(file['sfile']),
-                                                                                          get_modification_dt_from_file(file['dfilepath'])), should_print=False)
+                                                                                  get_modification_dt_from_file(file['sfile']),
+                                                                                  get_modification_dt_from_file(file['dfilepath'])), should_print=False)
                 elif file['type'] == "create":
                     bytes_done += file['diffsize']
                     shutil.copy2(file['sfile'], os.path.dirname(file['dfilepath']))
@@ -484,7 +491,7 @@ def start_menu():
         if not os.path.exists(ulp):
             os.mkdir(ulp)
         if len(log) > 0:
-            with open(os.path.join(ulp, "additions.log"), "a", encoding="utf-8") as ul:
+            with open(os.path.join(ulp, "full.log"), "a", encoding="utf-8") as ul:
                 ul.writelines(log)
         if len(file_changes['update']) > 0:
             with open(os.path.join(ulp, "updates.log"), "a", encoding="utf-8") as ul:
