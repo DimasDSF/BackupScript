@@ -182,7 +182,7 @@ def add_log(log_text: str, end: str = "\n", should_print=True, wait_time: float 
         print(log_text, end=end)
         if "\r" in end:
             sys.stdout.flush()
-    log.append("\n{0}: {1}".format(notzformat.format(get_cur_dt()), log_text))
+    log.append("\n{0}:\n{1}".format(notzformat.format(get_cur_dt()), log_text))
     if wait_time != 0:
         time.sleep(wait_time)
 
@@ -438,13 +438,17 @@ def process():
                 file_change_errors += 1
         clear_terminal()
         print("Finished Copying.")
-        add_log("{0} / {1} done.\n{4}{2}%\n{5}{6}{3}".format(len(file_list) - file_change_errors,
+        print("{0} / {1} done.\n{4}{2}%\n{5}{6}{3}".format(len(file_list) - file_change_errors,
                                                              len(file_list),
                                                              round((len(file_list) - file_change_errors) * 100 / len(file_list), 2),
                                                              "\n\n{} errors".format(file_change_errors) if file_change_errors != 0 else "",
                                                              get_progress_bar(round((len(file_list) - file_change_errors) * 100 / len(file_list), 2)),
                                                              get_progress_bar(round(((abs(bytes_done) / bytes_to_modify) if bytes_to_modify != 0 else 1) * 100, 2)),
                                                              "{0}/{1}".format(format_bytes(bytes_done), format_bytes(bytes_to_modify))))
+        add_log("{0} / {1} done.\n{2}%\n{3}".format(len(file_list) - file_change_errors,
+                                                             len(file_list),
+                                                             round((len(file_list) - file_change_errors) * 100 / len(file_list), 2),
+                                                             "\n\n{} errors".format(file_change_errors) if file_change_errors != 0 else ""), should_print=False)
     else:
         print("No Changes Found")
         time.sleep(2)
