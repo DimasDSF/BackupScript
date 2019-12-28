@@ -51,7 +51,7 @@ try:
                     "snapshot_mode": False
                 }
             ],
-            "path_stage_reduction": 0,
+            "path_reduction": 0,
             "local_backup_root_folder": "bkp",
             "tz": {
                 "hours": 0,
@@ -63,8 +63,13 @@ try:
         print("Setup Config and Restart.")
         time.sleep(5)
         sys.exit()
+except json.JSONDecodeError as e:
+    print("Config Init Failed due to a JSON Decoding Error. {0}\n{1}".format(type(e).__name__, e.args))
+    print("\nMake sure to properly escape back slashes or use forward slashes.\n\\->\\\\ or \\ -> /")
+    os.system('pause')
+    raise e
 except Exception as e:
-    print("Config Init Failed. Exception: {}".format(type(e).__name__, e.args))
+    print("Config Init Failed. Exception: {0}\n{1}".format(type(e).__name__, e.args))
     os.system('pause')
     raise e
 
@@ -80,7 +85,7 @@ def get_cur_dt():
 
 bkp_root = config['local_backup_root_folder']
 shift_tz = datetime.timezone(datetime.timedelta(hours=config['tz'].get('hours', 0), minutes=config['tz'].get('minutes', 0)))
-path_reduction = config.get('path_stage_reduction', None)
+path_reduction = config.get('path_reduction', None)
 path_reduction = None if path_reduction == 0 else path_reduction
 
 #####################################################
@@ -139,8 +144,7 @@ def add_log(log_text: str, end: str = "\n", wait_time: float = 0):
     print(log_text, end=end)
     if "\r" in end:
         sys.stdout.flush()
-    log.append(str(get_cur_dt()))
-    log.append("\n{}".format(log_text))
+    log.append("\n{0}: {1}".format(str(get_cur_dt()), log_text))
     if wait_time != 0:
         time.sleep(wait_time)
 
@@ -375,19 +379,19 @@ def process():
                 if file['type'] == "update":
                     bytes_done += file['diffsize']
                     shutil.copy2(file['sfile'], os.path.dirname(file['dfilepath']))
-                    add_file_change('update', "Updated Backup of {0} | {1} -> {2}".format(file['sfile'],
+                    add_file_change('update', "Updated | {0} | {1} -> {2}".format(file['sfile'],
                                                                                           get_modification_dt_from_file(file['sfile']),
                                                                                           get_modification_dt_from_file(file['dfilepath'])), should_print=False)
                 elif file['type'] == "create":
                     bytes_done += file['diffsize']
                     shutil.copy2(file['sfile'], os.path.dirname(file['dfilepath']))
-                    add_file_change('create', "Created Backup of {0}".format(file['sfile']), should_print=False)
+                    add_file_change('create', "Created | {0}".format(file['sfile']), should_print=False)
                 elif file['type'] == "remove" or file['type'] == "removef":
                     bytes_done += file['diffsize']
                     del_file_or_dir(file['sfile'])
-                    add_file_change(file['type'], "SnapshotMode Removed {0}".format(file['sfile']), should_print=False)
+                    add_file_change(file['type'], "Removed | {0}".format(file['sfile']), should_print=False)
             except Exception as e:
-                add_error("Failed to update file: {0} due to an Exception {1}. {2}".format(file, type(e).__name__, e.args), wait_time=3)
+                add_error("Failed to update file: {0} due to an Exception {1}. {2}".format(file, type(e).__name__, e.args), wait_time=5)
                 file_change_errors += 1
         clear_terminal()
         print("Finished Copying.")
@@ -417,7 +421,7 @@ def start_menu():
             else:
                 print("!OUTDATED Version! Latest: {0}/{1}. Built: {2}".format(lvd[1].get("version"), lvd[1].get("coderev"), lvd[1].get("buildtime")))
     os.system("pause >nul")
-    print("Starting")
+    add_log("Starting backup process")
     time.sleep(2)
     start_dt = datetime.datetime.now(shift_tz)
     try:
@@ -429,15 +433,19 @@ def start_menu():
     except KeyboardInterrupt:
         print("Manually Cancelled.")
         time.sleep(2)
-    print("Finished with {0} errors, {1} File Changes, {2} Folder Changes.\nWriting Logs".format(len(errors_list),
+    add_log("Finished after {3} with {0} errors, {1} File Changes, {2} Folder Changes.\nWriting Logs".format(len(errors_list),
                                                                                                  len(file_changes['update']) + len(file_changes['create']) + len(file_changes['remove']),
-                                                                                                 len(file_changes['folder']) + len(file_changes['removef'])))
+                                                                                                 len(file_changes['folder']) + len(file_changes['removef']),
+                                                                                                 str(datetime.datetime.now(shift_tz) - start_dt)))
     if (len(file_changes['update']) + len(file_changes['create']) + len(file_changes['remove']) + len(file_changes['removef']) + len(file_changes['folder']) + len(errors_list)) > 0:
         if not os.path.exists("bkpLogs"):
             os.mkdir("bkpLogs")
         ulp = os.path.join("bkpLogs", str(start_dt.date()))
         if not os.path.exists(ulp):
             os.mkdir(ulp)
+        if len(log) > 0:
+            with open(os.path.join(ulp, "additions.log"), "a", encoding="utf-8") as ul:
+                ul.writelines(log)
         if len(file_changes['update']) > 0:
             with open(os.path.join(ulp, "updates.log"), "a", encoding="utf-8") as ul:
                 ul.writelines(file_changes['update'])
