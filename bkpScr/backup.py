@@ -441,6 +441,7 @@ def start_menu():
     ap = argparse.ArgumentParser()
     ap.add_argument("-O", "--offline", help="Run in guaranteed offline mode, prevents version checks", action="store_true")
     args = ap.parse_args()
+    clear_terminal()
     print("Automated Backup Script\nVersion:{0}/{1}\nPress any key to proceed\nClose the app to cancel.".format(version.get('version', "Unavailable"), version.get('coderev', "Unavailable")))
     if not args.offline:
         lvd = is_latest_version()
