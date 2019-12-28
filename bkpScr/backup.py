@@ -158,6 +158,10 @@ def dl_update():
     except Exception as e:
         print("Update Failed due to an Exception: {0} / {1}".format(type(e).__name__, e.args))
     else:
+        print("Update Finished.\nRestarting", end="")
+        for t in range(0,3,1):
+            print(".", end="")
+            time.sleep(1)
         python = sys.executable
         os.execl(python, python, *sys.argv)
 
