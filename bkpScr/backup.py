@@ -12,6 +12,7 @@ import locale
 
 HARD_CONFIG_VER = 1
 LATEST_VER_DATA_URL = "https://raw.githubusercontent.com/DimasDSF/BackupScript/master/bkpScr/version.json"
+args = None
 
 try:
     if os.path.exists(os.path.join(os.path.dirname(os.path.realpath(__file__)), "config.json")):
@@ -320,12 +321,15 @@ def process():
     space_req = 0
     bytes_to_modify = 0
     allbkps: list = config['backup_dirs']
+    if args.nooutput:
+        print("Checking Files for changes | No Output Mode.")
     for n, b in enumerate(allbkps):
         sd = os.path.normpath(b['path'])
-        clear_terminal()
-        print("Checking Files for changes:")
-        print("Reading {0}".format(sd))
-        print("{0}/{1}. {2} Required Changes Indexed.".format(n, len(allbkps), len(file_list)))
+        if not args.nooutput:
+            clear_terminal()
+            print("Checking Files for changes:")
+            print("Reading {0}".format(sd))
+            print("{0}/{1}. {2} Required Changes Indexed.".format(n, len(allbkps), len(file_list)))
         p = os.path.splitdrive(sd)[1]
         fp = os.path.join(bkp_root, get_bkp_path(p[1:] if p.startswith(("\\", "/")) else p))
         if os.path.exists(sd):
@@ -379,12 +383,15 @@ def process():
                                                                                        format_bytes(bytes_to_modify)))
         dinfo = shutil.disk_usage(os.path.realpath('/' if os.name == 'nt' else __file__))
         print("This will {3} approximately {0} of space. {1} Available from {2}".format(format_bytes(abs(space_req)), format_bytes(dinfo.free), format_bytes(dinfo.total), "require" if space_req >= 0 else "free up"))
-        os.system("pause")
+        if not args.nopause:
+            os.system("pause")
         if space_req > dinfo.free:
             print("Not Enough Space to finish the backup process. Exiting.")
             raise IOError("Not Enough Space")
         file_change_errors = 0
         bytes_done = 0
+        if args.nooutput:
+            print("In Progress | No Output Mode.")
         for num, file in enumerate(file_list):
             if not os.path.exists(os.path.dirname(file['dfilepath'])):
                 try:
@@ -394,23 +401,25 @@ def process():
                 else:
                     add_file_change('folder', "Created folder {0}".format(os.path.dirname(file['dfilepath'])), should_print=False)
             try:
-                clear_terminal()
-                print("In Progress | Ctrl+C to cancel.")
-                print("Folder:{4}\nFile:{5}\n{0} / {1} done. DiffSize:{9}\n{6}{2}%\n{7}{8}{3}".format(num,
-                                                                                            len(file_list),
-                                                                                            round(num * 100 / len(file_list), 2),
-                                                                                            "\n\n{} errors".format(file_change_errors) if file_change_errors != 0 else "",
-                                                                                            os.path.split(file['sfile'])[0],
-                                                                                            os.path.split(file['sfile'])[1],
-                                                                                            get_progress_bar(round(num * 100 / len(file_list), 2)),
-                                                                                            get_progress_bar(round(((abs(bytes_done) / bytes_to_modify) if bytes_to_modify != 0 else 1) * 100, 2)),
-                                                                                            "{0}/{1}".format(format_bytes(bytes_done), format_bytes(bytes_to_modify)),
-                                                                                            format_bytes(file['diffsize'])))
-                add_log("Folder:{2}\nFile:{3}\n{0} / {1} done. DiffSize:{4}".format(num,
-                                                                                    len(file_list),
-                                                                                    os.path.split(file['sfile'])[0],
-                                                                                    os.path.split(file['sfile'])[1],
-                                                                                    format_bytes(file['diffsize'])), should_print=False)
+                if not args.nooutput:
+                    clear_terminal()
+                    print("In Progress | Ctrl+C to cancel.")
+                    print("Folder:{4}\nFile:{5}\n{0} / {1} done. DiffSize:{9}\n{6}{2}%\n{7}{8}{3}".format(num,
+                                                                                                len(file_list),
+                                                                                                round(num * 100 / len(file_list), 2),
+                                                                                                "\n\n{} errors".format(file_change_errors) if file_change_errors != 0 else "",
+                                                                                                os.path.split(file['sfile'])[0],
+                                                                                                os.path.split(file['sfile'])[1],
+                                                                                                get_progress_bar(round(num * 100 / len(file_list), 2)),
+                                                                                                get_progress_bar(round(((abs(bytes_done) / bytes_to_modify) if bytes_to_modify != 0 else 1) * 100, 2)),
+                                                                                                "{0}/{1}".format(format_bytes(bytes_done), format_bytes(bytes_to_modify)),
+                                                                                                format_bytes(file['diffsize'])))
+                if not args.nologs:
+                    add_log("Folder:{2}\nFile:{3}\n{0} / {1} done. DiffSize:{4}".format(num,
+                                                                                        len(file_list),
+                                                                                        os.path.split(file['sfile'])[0],
+                                                                                        os.path.split(file['sfile'])[1],
+                                                                                        format_bytes(file['diffsize'])), should_print=False)
                 if file['type'] == "update":
                     bytes_done += file['diffsize']
                     shutil.copy2(file['sfile'], os.path.dirname(file['dfilepath']))
@@ -446,8 +455,12 @@ def process():
         time.sleep(2)
 
 def start_menu():
+    global args
     ap = argparse.ArgumentParser()
     ap.add_argument("-O", "--offline", help="Run in guaranteed offline mode, prevents version checks", action="store_true")
+    ap.add_argument("-no", "-nooutput", help="disable interface updates", action="store_true")
+    ap.add_argument("-np", "-nopause", help="disable user input requirement", action="store_true")
+    ap.add_argument("-nl", "-nologs", help="disable log creation", action="store_true")
     args = ap.parse_args()
     clear_terminal()
     print("Automated Backup Script\nVersion:{0}/{1}\nPress any key to proceed\nClose the app to cancel.".format(version.get('version', "Unavailable"), version.get('coderev', "Unavailable")))
@@ -461,9 +474,13 @@ def start_menu():
             else:
                 print("!OUTDATED Version! Latest: {0}/{1}. Built: {2}".format(lvd[1].get("version"), lvd[1].get("coderev"), lvd[1].get("buildtime")))
                 print('Press any key to download an update.')
-                os.system('pause >nul')
+                if not args.nopause:
+                    os.system('pause >nul')
+                else:
+                    time.sleep(5)
                 dl_update()
-    os.system("pause >nul")
+    if not args.nopause:
+        os.system("pause >nul")
     add_log("Starting backup process")
     time.sleep(2)
     start_dt = datetime.datetime.now(shift_tz)
@@ -480,7 +497,7 @@ def start_menu():
                                                                                                  len(file_changes['update']) + len(file_changes['create']) + len(file_changes['remove']),
                                                                                                  len(file_changes['folder']) + len(file_changes['removef']),
                                                                                                  str(datetime.datetime.now(shift_tz) - start_dt)))
-    if (len(file_changes['update']) + len(file_changes['create']) + len(file_changes['remove']) + len(file_changes['removef']) + len(file_changes['folder']) + len(errors_list)) > 0:
+    if not args.nologs and (len(file_changes['update']) + len(file_changes['create']) + len(file_changes['remove']) + len(file_changes['removef']) + len(file_changes['folder']) + len(errors_list)) > 0:
         if not os.path.exists("bkpLogs"):
             os.mkdir("bkpLogs")
         ulp = os.path.join("bkpLogs", str(start_dt.date()))
@@ -508,7 +525,8 @@ def start_menu():
             with open(os.path.join(ulp, "errors.log"), "a", encoding="utf-8") as ul:
                 ul.writelines(errors_list)
     print("Done.")
-    os.system("pause")
+    if not args.nopause:
+        os.system("pause")
     sys.exit()
 
 start_menu()
