@@ -4,10 +4,14 @@
 --------------------
 
 A Configurable Backup Script.<br>
-Designed for use on Portable Devices, Tested on Windows
+Designed for use on Portable Devices, Tested on Windows<br>
+Only Semi-compatible with UNC Drives(Requires use of temporary virtual drives, setup with `pushd`/`popd`)
 
 Launch Parameters:<br>
-`-O : -offline : Launches in offline mode, prevents update checks.`
+`-O : --offline : Launches in offline mode, prevents update checks.`<br>
+`-no : --nooutput : Disables progress updates.`<br>
+`-nl : --nologs : Disables log creation.`<br>
+`-np : --nopause : Disables user interaction requirement, still pauses on errors.`<br>
 
 Usage:
 - On first launch script generates a base config file and exits
