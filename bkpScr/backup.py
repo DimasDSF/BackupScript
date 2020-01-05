@@ -454,8 +454,9 @@ def process():
         print("No Changes Found")
         time.sleep(2)
 
+finished_init = False
 def start_menu():
-    global args
+    global args, finished_init
     ap = argparse.ArgumentParser()
     ap.add_argument("-O", "--offline", help="Run in guaranteed offline mode, prevents version checks", action="store_true")
     ap.add_argument("-no", "--nooutput", help="disable interface updates", action="store_true")
@@ -484,6 +485,7 @@ def start_menu():
     add_log("Starting backup process")
     time.sleep(2)
     start_dt = datetime.datetime.now(shift_tz)
+    finished_init = True
     try:
         process()
     except IOError as e:
@@ -529,4 +531,16 @@ def start_menu():
         os.system("pause")
     sys.exit()
 
-start_menu()
+if __name__ == "__main__":
+    try:
+        start_menu()
+    except Exception as e:
+        if finished_init is False:
+            print("Exception Occured while Launching: {0} : {1}".format(type(e).__name__, e.args))
+            print('Press any key to try redownloading the script.')
+            os.system('pause >nul')
+            dl_update()
+        else:
+            print("Exception Occured: {0} : {1}".format(type(e).__name__, e.args))
+            os.system("pause")
+            raise e
