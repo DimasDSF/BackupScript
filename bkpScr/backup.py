@@ -353,14 +353,6 @@ def process():
                             file_list.append(dict(type="create", sfile=f.path, dfilepath=fp, diffsize=os.stat(f.path).st_size))
                             space_req += os.stat(f.path).st_size
                             bytes_to_modify += os.stat(f.path).st_size
-                    else:
-                        if not os.path.exists(fp):
-                            try:
-                                os.makedirs(fp)
-                            except FileExistsError:
-                                pass
-                            else:
-                                add_file_change('folder', "Created folder {0}".format(f.path))
                 if b.get('snapshot_mode', False):
                     rnodrivetd = os.path.splitdrive(sd)[1]
                     for f in recursive_fileiter(os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd))):
@@ -394,13 +386,13 @@ def process():
         file_change_errors = 0
         bytes_done = 0
         for num, file in enumerate(file_list):
-            if not os.path.exists(file['dfilepath']):
+            if not os.path.exists(os.path.dirname(file['dfilepath'])):
                 try:
                     os.makedirs(os.path.dirname(file['dfilepath']))
                 except FileExistsError:
                     pass
                 else:
-                    add_file_change('folder', "Created folder {0}".format(file['dfilepath']), should_print=False)
+                    add_file_change('folder', "Created folder {0}".format(os.path.dirname(file['dfilepath'])), should_print=False)
             try:
                 clear_terminal()
                 print("In Progress | Ctrl+C to cancel.")
