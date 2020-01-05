@@ -464,7 +464,13 @@ def start_menu():
     ap.add_argument("-nl", "--nologs", help="disable log creation", action="store_true")
     args = ap.parse_args()
     clear_terminal()
-    print("Automated Backup Script\nVersion:{0}/{1}\nPress any key to proceed\nClose the app to cancel.".format(version.get('version', "Unavailable"), version.get('coderev', "Unavailable")))
+    modes = ""
+    for a, ast in args.__dict__.items():
+        if ast is True:
+            if len(modes) > 0:
+                modes += "\n"
+            modes += "{0} mode enabled".format(a)
+    print("Automated Backup Script.{2}\nVersion:{0}/{1}\nPress any key to proceed\nClose the app to cancel.".format(version.get('version', "Unavailable"), version.get('coderev', "Unavailable"), "\n{}".format(modes) if len(modes) > 0 else ""))
     if not args.offline:
         lvd = is_latest_version()
         if lvd is None:
@@ -495,11 +501,12 @@ def start_menu():
     except KeyboardInterrupt:
         print("Manually Cancelled.")
         time.sleep(2)
-    add_log("Finished after {3} with {0} errors, {1} File Changes, {2} Folder Changes.\nWriting Logs".format(len(errors_list),
+    add_log("Finished after {3} with {0} errors, {1} File Changes, {2} Folder Changes.".format(len(errors_list),
                                                                                                  len(file_changes['update']) + len(file_changes['create']) + len(file_changes['remove']),
                                                                                                  len(file_changes['folder']) + len(file_changes['removef']),
                                                                                                  str(datetime.datetime.now(shift_tz) - start_dt)))
     if not args.nologs and (len(file_changes['update']) + len(file_changes['create']) + len(file_changes['remove']) + len(file_changes['removef']) + len(file_changes['folder']) + len(errors_list)) > 0:
+        add_log("Writing Logs")
         if not os.path.exists("bkpLogs"):
             os.mkdir("bkpLogs")
         ulp = os.path.join("bkpLogs", str(start_dt.date()))
