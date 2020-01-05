@@ -335,7 +335,7 @@ def process():
         if os.path.exists(sd):
             if os.path.isfile(sd):
                 if os.path.exists(fp):
-                    if os.stat(sd).st_mtime > os.stat(fp).st_mtime or b.get('force_backup', False):
+                    if os.stat(sd).st_mtime > os.stat(fp).st_mtime + 1 or b.get('force_backup', False):
                         file_list.append(dict(type="update", sfile=sd, dfilepath=fp, diffsize=abs(os.stat(fp).st_size - os.stat(sd).st_size)))
                         space_req += os.stat(fp).st_size - os.stat(sd).st_size
                         bytes_to_modify += abs(os.stat(fp).st_size - os.stat(sd).st_size)
@@ -349,7 +349,7 @@ def process():
                     fp = os.path.join(bkp_root, get_bkp_path(fspldrv[1:] if fspldrv.startswith(("\\", "/")) else fspldrv))
                     if f.is_file():
                         if os.path.exists(fp):
-                            if os.stat(f.path).st_mtime > os.stat(fp).st_mtime or b.get('force_backup', False):
+                            if os.stat(f.path).st_mtime > os.stat(fp).st_mtime + 1 or b.get('force_backup', False):
                                 file_list.append(dict(type="update", sfile=f.path, dfilepath=fp, diffsize=abs(os.stat(f.path).st_size - os.stat(fp).st_size)))
                                 space_req += os.stat(f.path).st_size - os.stat(fp).st_size
                                 bytes_to_modify += abs(os.stat(f.path).st_size - os.stat(fp).st_size)
