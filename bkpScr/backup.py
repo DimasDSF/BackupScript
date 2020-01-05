@@ -458,9 +458,9 @@ def start_menu():
     global args
     ap = argparse.ArgumentParser()
     ap.add_argument("-O", "--offline", help="Run in guaranteed offline mode, prevents version checks", action="store_true")
-    ap.add_argument("-no", "-nooutput", help="disable interface updates", action="store_true")
-    ap.add_argument("-np", "-nopause", help="disable user input requirement", action="store_true")
-    ap.add_argument("-nl", "-nologs", help="disable log creation", action="store_true")
+    ap.add_argument("-no", "--nooutput", help="disable interface updates", action="store_true")
+    ap.add_argument("-np", "--nopause", help="disable user input requirement", action="store_true")
+    ap.add_argument("-nl", "--nologs", help="disable log creation", action="store_true")
     args = ap.parse_args()
     clear_terminal()
     print("Automated Backup Script\nVersion:{0}/{1}\nPress any key to proceed\nClose the app to cancel.".format(version.get('version', "Unavailable"), version.get('coderev', "Unavailable")))
