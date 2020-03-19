@@ -330,7 +330,7 @@ def process():
             clear_terminal()
             print("Checking Files for changes:")
             print("Reading {0}".format(sd))
-            print("{0}/{1}. {2} Required Changes Indexed.".format(n, len(allbkps), len(file_list)))
+            print("{0}/{1}. {2} Required Changes Indexed.".format(n, len(allbkps), len(file_list)), end="\r")
         p = os.path.splitdrive(sd)[1]
         fp = os.path.join(bkp_root, get_bkp_path(p[1:] if p.startswith(("\\", "/")) else p))
         if os.path.exists(sd):
@@ -349,12 +349,16 @@ def process():
                     fspldrv = os.path.splitdrive(f.path)[1]
                     fp = os.path.join(bkp_root, get_bkp_path(fspldrv[1:] if fspldrv.startswith(("\\", "/")) else fspldrv))
                     if not args.nooutput:
-                        if reprint_temp[0] != n or reprint_temp[1] != len(allbkps) or reprint_temp[2] != len(file_list) or reprint_temp[3] != sd:
+                        if reprint_temp[3] != sd:
                             clear_terminal()
                             print("Checking Files for changes:")
                             print("Reading {0}".format(sd))
-                            print("{0}/{1}. {2} Required Changes Indexed.".format(n, len(allbkps), len(file_list)))
+                            print("{0}/{1}. {2} Required Changes Indexed.".format(n, len(allbkps), len(file_list)), end='\r', flush=True)
                             reprint_temp = [n, len(allbkps), len(file_list), sd]
+                        else:
+                            if reprint_temp[0] != n or reprint_temp[1] != len(allbkps) or reprint_temp[2] != len(file_list):
+                                print("{0}/{1}. {2} Required Changes Indexed.".format(n, len(allbkps), len(file_list)), end='\r', flush=True)
+                                reprint_temp = [n, len(allbkps), len(file_list), sd]
                     if f.is_file():
                         if os.path.exists(fp):
                             if os.stat(f.path).st_mtime > os.stat(fp).st_mtime + 1 or b.get('force_backup', False):
@@ -371,12 +375,16 @@ def process():
                         rsflunod = os.path.splitdrive(f.path)[1]
                         sf = get_src_path(sd, rsflunod)
                         if not args.nooutput:
-                            if reprint_temp[0] != n or reprint_temp[1] != len(allbkps) or reprint_temp[2] != len(file_list) or reprint_temp[3] != os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd)):
+                            if reprint_temp[3] != os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd)):
                                 clear_terminal()
                                 print("Checking Files for changes:")
                                 print("Reading {0}".format(os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd))))
-                                print("{0}/{1}. {2} Required Changes Indexed.".format(n, len(allbkps), len(file_list)))
+                                print("{0}/{1}. {2} Required Changes Indexed.".format(n, len(allbkps), len(file_list)), end="\r")
                                 reprint_temp = [n, len(allbkps), len(file_list), os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd))]
+                            else:
+                                if reprint_temp[0] != n or reprint_temp[1] != len(allbkps) or reprint_temp[2] != len(file_list):
+                                    print("{0}/{1}. {2} Required Changes Indexed.".format(n, len(allbkps), len(file_list)), end="\r")
+                                    reprint_temp = [n, len(allbkps), len(file_list), os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd))]
                         if not os.path.exists(sf):
                             file_list.append(dict(type="remove" if os.path.isfile(f.path) else "removef", sfile=f.path, dfilepath=f.path, diffsize=os.stat(f.path).st_size))
                             space_req += -os.stat(f.path).st_size
@@ -466,6 +474,7 @@ def process():
                                                              round((len(file_list) - file_change_errors) * 100 / len(file_list), 2),
                                                              "\n\n{} errors".format(file_change_errors) if file_change_errors != 0 else ""), should_print=False)
     else:
+        print("{0}/{0}. {1} Required Changes Indexed.".format(len(allbkps), len(file_list)))
         print("No Changes Found")
         time.sleep(2)
 
