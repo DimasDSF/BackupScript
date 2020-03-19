@@ -325,6 +325,7 @@ def process():
         print("Checking Files for changes | No Output Mode.")
     for n, b in enumerate(allbkps):
         sd = os.path.normpath(b['path'])
+        reprint_temp = [0, 0, 0, ""]
         if not args.nooutput:
             clear_terminal()
             print("Checking Files for changes:")
@@ -348,10 +349,12 @@ def process():
                     fspldrv = os.path.splitdrive(f.path)[1]
                     fp = os.path.join(bkp_root, get_bkp_path(fspldrv[1:] if fspldrv.startswith(("\\", "/")) else fspldrv))
                     if not args.nooutput:
-                        clear_terminal()
-                        print("Checking Files for changes:")
-                        print("Reading {0}".format(f.path))
-                        print("{0}/{1}. {2} Required Changes Indexed.".format(n, len(allbkps), len(file_list)))
+                        if reprint_temp[0] != n or reprint_temp[1] != len(allbkps) or reprint_temp[2] != len(file_list) or reprint_temp[3] != sd:
+                            clear_terminal()
+                            print("Checking Files for changes:")
+                            print("Reading {0}".format(sd))
+                            print("{0}/{1}. {2} Required Changes Indexed.".format(n, len(allbkps), len(file_list)))
+                            reprint_temp = [n, len(allbkps), len(file_list), sd]
                     if f.is_file():
                         if os.path.exists(fp):
                             if os.stat(f.path).st_mtime > os.stat(fp).st_mtime + 1 or b.get('force_backup', False):
@@ -368,10 +371,12 @@ def process():
                         rsflunod = os.path.splitdrive(f.path)[1]
                         sf = get_src_path(sd, rsflunod)
                         if not args.nooutput:
-                            clear_terminal()
-                            print("Checking Files for changes:")
-                            print("Reading {0}".format(f.path))
-                            print("{0}/{1}. {2} Required Changes Indexed.".format(n, len(allbkps), len(file_list)))
+                            if reprint_temp[0] != n or reprint_temp[1] != len(allbkps) or reprint_temp[2] != len(file_list) or reprint_temp[3] != os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd)):
+                                clear_terminal()
+                                print("Checking Files for changes:")
+                                print("Reading {0}".format(os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd))))
+                                print("{0}/{1}. {2} Required Changes Indexed.".format(n, len(allbkps), len(file_list)))
+                                reprint_temp = [n, len(allbkps), len(file_list), os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd))]
                         if not os.path.exists(sf):
                             file_list.append(dict(type="remove" if os.path.isfile(f.path) else "removef", sfile=f.path, dfilepath=f.path, diffsize=os.stat(f.path).st_size))
                             space_req += -os.stat(f.path).st_size
