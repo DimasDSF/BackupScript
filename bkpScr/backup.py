@@ -347,6 +347,11 @@ def process():
                 for f in recursive_fileiter(sd):
                     fspldrv = os.path.splitdrive(f.path)[1]
                     fp = os.path.join(bkp_root, get_bkp_path(fspldrv[1:] if fspldrv.startswith(("\\", "/")) else fspldrv))
+                    if not args.nooutput:
+                        clear_terminal()
+                        print("Checking Files for changes:")
+                        print("Reading {0}".format(f.path))
+                        print("{0}/{1}. {2} Required Changes Indexed.".format(n, len(allbkps), len(file_list)))
                     if f.is_file():
                         if os.path.exists(fp):
                             if os.stat(f.path).st_mtime > os.stat(fp).st_mtime + 1 or b.get('force_backup', False):
@@ -362,6 +367,11 @@ def process():
                     for f in recursive_fileiter(os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd))):
                         rsflunod = os.path.splitdrive(f.path)[1]
                         sf = get_src_path(sd, rsflunod)
+                        if not args.nooutput:
+                            clear_terminal()
+                            print("Checking Files for changes:")
+                            print("Reading {0}".format(f.path))
+                            print("{0}/{1}. {2} Required Changes Indexed.".format(n, len(allbkps), len(file_list)))
                         if not os.path.exists(sf):
                             file_list.append(dict(type="remove" if os.path.isfile(f.path) else "removef", sfile=f.path, dfilepath=f.path, diffsize=os.stat(f.path).st_size))
                             space_req += -os.stat(f.path).st_size
