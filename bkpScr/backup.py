@@ -9,10 +9,17 @@ import socket
 import urllib.request
 import argparse
 import locale
+from pathlib import Path
 
 HARD_CONFIG_VER = 1
 LATEST_VER_DATA_URL = "https://raw.githubusercontent.com/DimasDSF/BackupScript/master/bkpScr/version.json"
-args = None
+class Arguments(object):
+    def __init__(self):
+        self.args: argparse.Namespace = argparse.Namespace()
+
+    def update_args(self, args):
+        self.args = args
+launch_args = Arguments()
 
 try:
     if os.path.exists(os.path.join(os.path.dirname(os.path.realpath(__file__)), "config.json")):
@@ -157,8 +164,8 @@ def dl_update():
                     with open(os.path.join(os.path.dirname(os.path.realpath(__file__)), filedata['name']), "w+") as dl:
                         text = dld_data.read().decode(encoding=locale.getdefaultlocale()[1])
                         dl.write(text)
-    except Exception as e:
-        print("Update Failed due to an Exception: {0} / {1}".format(type(e).__name__, e.args))
+    except Exception as update_exception:
+        print("Update Failed due to an Exception: {0} / {1}".format(type(update_exception).__name__, update_exception.args))
     else:
         print("Update Finished.\nRestarting", end="")
         for t in range(3):
@@ -172,6 +179,7 @@ log = []
 errors_list = []
 file_changes = {
     "update": [],
+    "rename": [],
     "create": [],
     "remove": [],
     "removef": [],
@@ -312,6 +320,16 @@ def format_bytes(bytesn):
     converted = float(bytesn) / float(1024 ** exponent)
     return '%s%.2f%s' % ("-" if negative else "", converted, suffix)
 
+def get_actual_filepath(p: str):
+    try:
+        return str(Path(p).resolve())
+    except FileNotFoundError:
+        print(f"Failed to find File at: {p} returning path")
+        return p
+
+def get_actual_filename(p: str):
+    return Path(p).resolve().name
+
 def process():
     clear_terminal()
     print("Initializing.")
@@ -321,12 +339,12 @@ def process():
     space_req = 0
     bytes_to_modify = 0
     allbkps: list = config['backup_dirs']
-    if args.nooutput:
+    if launch_args.args.nooutput:
         print("Checking Files for changes | No Output Mode.")
     for n, b in enumerate(allbkps):
         sd = os.path.normpath(b['path'])
         reprint_temp = [0, 0, 0, ""]
-        if not args.nooutput:
+        if not launch_args.args.nooutput:
             clear_terminal()
             print("Checking Files for changes:")
             print("Reading {0}".format(sd))
@@ -334,6 +352,7 @@ def process():
         p = os.path.splitdrive(sd)[1]
         fp = os.path.join(bkp_root, get_bkp_path(p[1:] if p.startswith(("\\", "/")) else p))
         if os.path.exists(sd):
+            # Source Dir Exists
             if os.path.isfile(sd):
                 if os.path.exists(fp):
                     if os.stat(sd).st_mtime > os.stat(fp).st_mtime + 1 or b.get('force_backup', False):
@@ -348,7 +367,7 @@ def process():
                 for f in recursive_fileiter(sd):
                     fspldrv = os.path.splitdrive(f.path)[1]
                     fp = os.path.join(bkp_root, get_bkp_path(fspldrv[1:] if fspldrv.startswith(("\\", "/")) else fspldrv))
-                    if not args.nooutput:
+                    if not launch_args.args.nooutput:
                         if reprint_temp[3] != sd:
                             clear_terminal()
                             print("Checking Files for changes:")
@@ -371,24 +390,25 @@ def process():
                             bytes_to_modify += os.stat(f.path).st_size
                 if b.get('snapshot_mode', False):
                     rnodrivetd = os.path.splitdrive(sd)[1]
-                    for f in recursive_fileiter(os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd))):
-                        rsflunod = os.path.splitdrive(f.path)[1]
-                        sf = get_src_path(sd, rsflunod)
-                        if not args.nooutput:
-                            if reprint_temp[3] != os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd)):
-                                clear_terminal()
-                                print("Checking Files for changes:")
-                                print("Reading {0}".format(os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd))))
-                                print("{0}/{1}. {2} Required Changes Indexed.".format(n, len(allbkps), len(file_list)), end="\r")
-                                reprint_temp = [n, len(allbkps), len(file_list), os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd))]
-                            else:
-                                if reprint_temp[0] != n or reprint_temp[1] != len(allbkps) or reprint_temp[2] != len(file_list):
+                    if os.path.exists(os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd))):
+                        for f in recursive_fileiter(os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd))):
+                            rsflunod = os.path.splitdrive(f.path)[1]
+                            sf = get_src_path(sd, rsflunod)
+                            if not launch_args.args.nooutput:
+                                if reprint_temp[3] != os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd)):
+                                    clear_terminal()
+                                    print("Checking Files for changes:")
+                                    print("Reading {0}".format(os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd))))
                                     print("{0}/{1}. {2} Required Changes Indexed.".format(n, len(allbkps), len(file_list)), end="\r")
                                     reprint_temp = [n, len(allbkps), len(file_list), os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd))]
-                        if not os.path.exists(sf):
-                            file_list.append(dict(type="remove" if os.path.isfile(f.path) else "removef", sfile=f.path, dfilepath=f.path, diffsize=os.stat(f.path).st_size))
-                            space_req += -os.stat(f.path).st_size
-                            bytes_to_modify += os.stat(f.path).st_size
+                                else:
+                                    if reprint_temp[0] != n or reprint_temp[1] != len(allbkps) or reprint_temp[2] != len(file_list):
+                                        print("{0}/{1}. {2} Required Changes Indexed.".format(n, len(allbkps), len(file_list)), end="\r")
+                                        reprint_temp = [n, len(allbkps), len(file_list), os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd))]
+                            if not os.path.exists(sf):
+                                file_list.append(dict(type="remove" if os.path.isfile(f.path) else "removef", sfile=f.path, dfilepath=f.path, diffsize=os.stat(f.path).st_size))
+                                space_req += -os.stat(f.path).st_size
+                                bytes_to_modify += os.stat(f.path).st_size
         else:
             if b.get('snapshot_mode', False):
                 if os.path.exists(fp):
@@ -406,14 +426,14 @@ def process():
                                                                                        format_bytes(bytes_to_modify)))
         dinfo = shutil.disk_usage(os.path.realpath('/' if os.name == 'nt' else __file__))
         print("This will {3} approximately {0} of space. {1} Available from {2}".format(format_bytes(abs(space_req)), format_bytes(dinfo.free), format_bytes(dinfo.total), "require" if space_req >= 0 else "free up"))
-        if not args.nopause:
+        if not launch_args.args.nopause:
             os.system("pause")
         if space_req > dinfo.free:
             print("Not Enough Space to finish the backup process. Exiting.")
             raise IOError("Not Enough Space")
         file_change_errors = 0
         bytes_done = 0
-        if args.nooutput:
+        if launch_args.args.nooutput:
             print("In Progress | No Output Mode.")
         for num, file in enumerate(file_list):
             if not os.path.exists(os.path.dirname(file['dfilepath'])):
@@ -424,7 +444,7 @@ def process():
                 else:
                     add_file_change('folder', "Created folder {0}".format(os.path.dirname(file['dfilepath'])), should_print=False)
             try:
-                if not args.nooutput:
+                if not launch_args.args.nooutput:
                     clear_terminal()
                     print("In Progress | Ctrl+C to cancel.")
                     print("Folder:{4}\nFile:{5}\n{0} / {1} done. DiffSize:{9}\n{6}{2}%\n{7}{8}{3}".format(num,
@@ -437,7 +457,7 @@ def process():
                                                                                                 get_progress_bar(round(((abs(bytes_done) / bytes_to_modify) if bytes_to_modify != 0 else 1) * 100, 2)),
                                                                                                 "{0}/{1}".format(format_bytes(bytes_done), format_bytes(bytes_to_modify)),
                                                                                                 format_bytes(file['diffsize'])))
-                if not args.nologs:
+                if not launch_args.args.nologs:
                     add_log("Folder:{2}\nFile:{3}\n{0} / {1} done. DiffSize:{4}".format(num,
                                                                                         len(file_list),
                                                                                         os.path.split(file['sfile'])[0],
@@ -445,20 +465,25 @@ def process():
                                                                                         format_bytes(file['diffsize'])), should_print=False)
                 if file['type'] == "update":
                     bytes_done += file['diffsize']
-                    shutil.copy2(file['sfile'], os.path.dirname(file['dfilepath']))
+                    act_filepath = get_actual_filepath(file['dfilepath'])
+                    shutil.copy2(file['sfile'], os.path.dirname(act_filepath))
                     add_file_change('update', "Updated | {0} | {1} -> {2}".format(file['sfile'],
                                                                                   get_modification_dt_from_file(file['sfile']),
                                                                                   get_modification_dt_from_file(file['dfilepath'])), should_print=False)
+                    if os.path.basename(act_filepath) != os.path.basename(file['sfile']):
+                        os.rename(act_filepath, os.path.join(os.path.dirname(act_filepath), os.path.basename(file['sfile'])))
+                        add_file_change('rename', "Renamed | {0} | {1} -> {2}".format(act_filepath,
+                                                                                      os.path.basename(act_filepath), os.path.basename(file["sfile"])))
                 elif file['type'] == "create":
                     bytes_done += file['diffsize']
                     shutil.copy2(file['sfile'], os.path.dirname(file['dfilepath']))
                     add_file_change('create', "Created | {0}".format(file['sfile']), should_print=False)
                 elif file['type'] == "remove" or file['type'] == "removef":
                     bytes_done += file['diffsize']
-                    del_file_or_dir(file['sfile'])
-                    add_file_change(file['type'], "Removed | {0}".format(file['sfile']), should_print=False)
-            except Exception as e:
-                add_error("Failed to update file: {0} due to an Exception {1}. {2}".format(file, type(e).__name__, e.args), wait_time=5)
+                    del_file_or_dir(get_actual_filepath(file['sfile']))
+                    add_file_change(file['type'], "Removed | {0}".format(get_actual_filepath(file['sfile'])), should_print=False)
+            except Exception as fileupd_exception:
+                add_error("Failed to update file: {0} due to an Exception {1}. {2}".format(file, type(fileupd_exception).__name__, fileupd_exception.args), wait_time=5)
                 file_change_errors += 1
         clear_terminal()
         print("Finished Copying.")
@@ -480,13 +505,14 @@ def process():
 
 finished_init = False
 def start_menu():
-    global args, finished_init
+    global finished_init
     ap = argparse.ArgumentParser()
     ap.add_argument("-O", "--offline", help="Run in guaranteed offline mode, prevents version checks", action="store_true")
     ap.add_argument("-no", "--nooutput", help="disable interface updates", action="store_true")
     ap.add_argument("-np", "--nopause", help="disable user input requirement", action="store_true")
     ap.add_argument("-nl", "--nologs", help="disable log creation", action="store_true")
     args = ap.parse_args()
+    launch_args.update_args(args)
     clear_terminal()
     modes = ""
     for a, ast in args.__dict__.items():
@@ -518,18 +544,19 @@ def start_menu():
     finished_init = True
     try:
         process()
-    except IOError as e:
-        print("{0}: {1}".format(type(e).__name__, e.args))
+    except IOError as ioexc:
+        print("{0}: {1}".format(type(ioexc).__name__, ",".join(list(map(lambda x: str(x), ioexc.args)))))
         os.system("pause")
         sys.exit()
     except KeyboardInterrupt:
         print("Manually Cancelled.")
         time.sleep(2)
-    add_log("Finished after {3} with {0} errors, {1} File Changes, {2} Folder Changes.".format(len(errors_list),
-                                                                                                 len(file_changes['update']) + len(file_changes['create']) + len(file_changes['remove']),
-                                                                                                 len(file_changes['folder']) + len(file_changes['removef']),
-                                                                                                 str(datetime.datetime.now(shift_tz) - start_dt)))
-    if not args.nologs and (len(file_changes['update']) + len(file_changes['create']) + len(file_changes['remove']) + len(file_changes['removef']) + len(file_changes['folder']) + len(errors_list)) > 0:
+    add_log("Finished after {3} with {0} errors, {1} File Changes, {2} Folder Changes.{4}".format(len(errors_list),
+                                                                                                    len(file_changes['update']) + len(file_changes['create']) + len(file_changes['remove']),
+                                                                                                    len(file_changes['folder']) + len(file_changes['removef']),
+                                                                                                    str(datetime.datetime.now(shift_tz) - start_dt),
+                                                                                                    "\n{0} file{1} renamed due to filename case changes".format(len(file_changes['rename']), "s" if len(file_changes['rename']) != 1 else "") if len(file_changes['rename']) > 0 else ""))
+    if not args.nologs and (len(file_changes['update']) + len(file_changes['rename']) + len(file_changes['create']) + len(file_changes['remove']) + len(file_changes['removef']) + len(file_changes['folder']) + len(errors_list)) > 0:
         add_log("Writing Logs")
         if not os.path.exists("bkpLogs"):
             os.mkdir("bkpLogs")
@@ -542,6 +569,9 @@ def start_menu():
         if len(file_changes['update']) > 0:
             with open(os.path.join(ulp, "updates.log"), "a", encoding="utf-8") as ul:
                 ul.writelines(file_changes['update'])
+        if len(file_changes['rename']) > 0:
+            with open(os.path.join(ulp, "renames.log"), "a", encoding="utf-8") as ul:
+                ul.writelines(file_changes['rename'])
         if len(file_changes['create']) > 0:
             with open(os.path.join(ulp, "additions.log"), "a", encoding="utf-8") as ul:
                 ul.writelines(file_changes['create'])
