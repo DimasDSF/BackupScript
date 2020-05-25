@@ -113,13 +113,6 @@ def connection_available(timeout=3):
         return False
 
 def is_latest_version():
-    try:
-        vts = version.get('buildstamp', "Unavailable")
-        if vts.isnumeric():
-            if get_cur_dt() - datetime.datetime.fromtimestamp(int(vts)) < datetime.timedelta(minutes=20):
-                return True
-    except:
-        pass
     if connection_available():
         try:
             if LATEST_VER_DATA_URL != "":
@@ -133,10 +126,12 @@ def is_latest_version():
                 current_cr: str = version.get('coderev', "Unavailable")
                 if latest_cr.isnumeric() and current_cr.isnumeric():
                     if int(current_cr) == int(latest_cr):
-                        return [True, vdata]
+                        return [True, vdata, False]
+                    elif int(current_cr) > int(latest_cr):
+                        return [True, vdata, True]
             except:
                 return None
-        return [False, vdata]
+        return [False, vdata, False]
     else:
         return None
 
@@ -305,6 +300,14 @@ def recursive_fileiter(sdir):
                 ret.append(item)
     return ret
 
+def recursive_folderiter(sdir):
+    ret = list()
+    subfolders = [f for f in os.scandir(sdir) if f.is_dir()]
+    ret.extend(subfolders)
+    for folder in subfolders:
+        ret.extend(recursive_folderiter(folder.path))
+    return ret
+
 def format_bytes(bytesn):
     negative = abs(bytesn) > bytesn
     if bytesn is None:
@@ -405,6 +408,13 @@ def process():
                                     if reprint_temp[0] != n or reprint_temp[1] != len(allbkps) or reprint_temp[2] != len(file_list):
                                         print("{0}/{1}. {2} Required Changes Indexed.".format(n, len(allbkps), len(file_list)), end="\r")
                                         reprint_temp = [n, len(allbkps), len(file_list), os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd))]
+                            if not os.path.exists(sf):
+                                file_list.append(dict(type="remove" if os.path.isfile(f.path) else "removef", sfile=f.path, dfilepath=f.path, diffsize=os.stat(f.path).st_size))
+                                space_req += -os.stat(f.path).st_size
+                                bytes_to_modify += os.stat(f.path).st_size
+                        for f in recursive_folderiter(os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd))):
+                            rsflunod = os.path.splitdrive(f.path)[1]
+                            sf = get_src_path(sd, rsflunod)
                             if not os.path.exists(sf):
                                 file_list.append(dict(type="remove" if os.path.isfile(f.path) else "removef", sfile=f.path, dfilepath=f.path, diffsize=os.stat(f.path).st_size))
                                 space_req += -os.stat(f.path).st_size
@@ -526,16 +536,23 @@ def start_menu():
         if lvd is None:
             print("Latest Version Data is Unavailable")
         else:
-            if lvd[0] is True:
-                print("This is the latest version")
+            if lvd[2] is True:
+                print('-------------------------------')
+                print('INDEV VERSION PREVENTING UPDATE')
+                print(f'Latest: {lvd[1].get("version")}/{lvd[1].get("coderev")} Built: {lvd[1].get("buildtime")}')
+                print('INDEV VERSION PREVENTING UPDATE')
+                print('-------------------------------')
             else:
-                print("!OUTDATED Version! Latest: {0}/{1}. Built: {2}".format(lvd[1].get("version"), lvd[1].get("coderev"), lvd[1].get("buildtime")))
-                print('Press any key to download an update.')
-                if not args.nopause:
-                    os.system('pause >nul')
+                if lvd[0] is True:
+                    print("This is the latest version")
                 else:
-                    time.sleep(5)
-                dl_update()
+                    print("!OUTDATED Version! Latest: {0}/{1}. Built: {2}".format(lvd[1].get("version"), lvd[1].get("coderev"), lvd[1].get("buildtime")))
+                    print('Press any key to download an update.')
+                    if not args.nopause:
+                        os.system('pause >nul')
+                    else:
+                        time.sleep(5)
+                    dl_update()
     if not args.nopause:
         os.system("pause >nul")
     add_log("Starting backup process")
