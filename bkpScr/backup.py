@@ -434,6 +434,8 @@ def process():
                         bytes_to_modify += os.stat(fp).st_size
                 else:
                     add_error("{} Backup Source is Unavailable.".format(sd), wait_time=1)
+        except FileNotFoundError as e:
+            add_error(f"Scanning File {e.filename} raised an exception: {e.__class__.__name__}: {e.args}")
         except Exception as e:
             add_error(f"Scanning File {sd} raised an exception: {e.__class__.__name__}: {e.args}")
     if len(file_list) > 0:
