@@ -191,10 +191,11 @@ def add_log(log_text: str, end: str = "\n", should_print=True, wait_time: float 
         time.sleep(wait_time)
 
 def add_error(error_text: str, wait_time: float = 0):
-    print(error_text)
     errors_list.append("\n{}".format(error_text))
-    if wait_time != 0:
-        time.sleep(wait_time)
+    if not launch_args.args.nooutput:
+        print(error_text)
+        if wait_time != 0:
+            time.sleep(wait_time)
 
 def add_file_change(change_type: str, change_text: str, should_print=True, wait_time: float = 0):
     if change_type in file_changes.keys():
@@ -289,21 +290,26 @@ def get_progress_bar(perc: float):
 
 def recursive_fileiter(sdir):
     ret = list()
-    try:
-        folders = [f.path for f in os.scandir(sdir) if f.is_dir()]
-    except FileNotFoundError as e:
-        if os.path.islink(e.filename) or Path(e.filename).is_symlink():
-            raise FileNotFoundError(f"File was found but it apparently is a {'sym' if Path(e.filename).is_symlink() else ''}link that cannot be reached. {e.__class__.__name__} {e.args}")
-        else:
-            raise e
+    folders = list()
+    for f in os.scandir(sdir):
+        try:
+            if f.is_dir():
+                folders.append(f.path)
+        except FileNotFoundError as e:
+            if os.path.islink(e.filename) or Path(e.filename).is_symlink():
+                add_error(f"Folder {e.filename} was found but it apparently is a {'sym' if Path(e.filename).is_symlink() else ''}link that cannot be reached. {e.__class__.__name__} {e.args}")
+        except:
+            raise
     for folder in folders:
         ret.extend(recursive_fileiter(folder))
     if os.path.isfile(sdir):
         ret.append(sdir)
-    with os.scandir(sdir) as directory:
-        for item in directory:
+    for item in os.scandir(sdir):
+        try:
             if item.is_file():
                 ret.append(item)
+        except Exception as e:
+            add_error(f"Scanning File {item.filename} raised an exception: {e.__class__.__name__}: {e.args}")
     return ret
 
 def recursive_folderiter(sdir):
@@ -434,8 +440,6 @@ def process():
                         bytes_to_modify += os.stat(fp).st_size
                 else:
                     add_error("{} Backup Source is Unavailable.".format(sd), wait_time=1)
-        except FileNotFoundError as e:
-            add_error(f"Scanning File {e.filename} raised an exception: {e.__class__.__name__}: {e.args}")
         except Exception as e:
             add_error(f"Scanning File {sd} raised an exception: {e.__class__.__name__}: {e.args}")
     if len(file_list) > 0:
@@ -616,6 +620,11 @@ def start_menu():
             with open(os.path.join(ulp, "errors.log"), "a", encoding="utf-8") as ul:
                 ul.writelines(errors_list)
     print("Done.")
+    if len(errors_list) > 0:
+        print(f"Encountered {len(errors_list)} errors.")
+        time.sleep(2)
+        ulp = os.path.join("bkpLogs", str(start_dt.date()))
+        os.system("start " + os.path.join(ulp, 'errors.log').replace('\\', '/'))
     if not args.nopause:
         os.system("pause")
     sys.exit()
