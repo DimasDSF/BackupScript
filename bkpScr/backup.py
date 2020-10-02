@@ -289,7 +289,13 @@ def get_progress_bar(perc: float):
 
 def recursive_fileiter(sdir):
     ret = list()
-    folders = [f.path for f in os.scandir(sdir) if f.is_dir()]
+    try:
+        folders = [f.path for f in os.scandir(sdir) if f.is_dir()]
+    except FileNotFoundError as e:
+        if os.path.islink(e.filename) or Path(e.filename).is_symlink():
+            raise FileNotFoundError(f"File was found but it apparently is a {'sym' if Path(e.filename).is_symlink() else ''}link that cannot be reached. {e.__class__.__name__} {e.args}")
+        else:
+            raise e
     for folder in folders:
         ret.extend(recursive_fileiter(folder))
     if os.path.isfile(sdir):
@@ -346,87 +352,90 @@ def process():
         print("Checking Files for changes | No Output Mode.")
     for n, b in enumerate(allbkps):
         sd = os.path.normpath(b['path'])
-        reprint_temp = [0, 0, 0, ""]
-        if not launch_args.args.nooutput:
-            clear_terminal()
-            print("Checking Files for changes:")
-            print("Reading {0}".format(sd))
-            print("{0}/{1}. {2} Required Changes Indexed.".format(n, len(allbkps), len(file_list)), end="\r")
-        p = os.path.splitdrive(sd)[1]
-        fp = os.path.join(bkp_root, get_bkp_path(p[1:] if p.startswith(("\\", "/")) else p))
-        if os.path.exists(sd):
-            # Source Dir Exists
-            if os.path.isfile(sd):
-                if os.path.exists(fp):
-                    if os.stat(sd).st_mtime > os.stat(fp).st_mtime + 1 or b.get('force_backup', False):
-                        file_list.append(dict(type="update", sfile=sd, dfilepath=fp, diffsize=abs(os.stat(fp).st_size - os.stat(sd).st_size)))
-                        space_req += os.stat(fp).st_size - os.stat(sd).st_size
-                        bytes_to_modify += abs(os.stat(fp).st_size - os.stat(sd).st_size)
+        try:
+            reprint_temp = [0, 0, 0, ""]
+            if not launch_args.args.nooutput:
+                clear_terminal()
+                print("Checking Files for changes:")
+                print("Reading {0}".format(sd))
+                print("{0}/{1}. {2} Required Changes Indexed.".format(n, len(allbkps), len(file_list)), end="\r")
+            p = os.path.splitdrive(sd)[1]
+            fp = os.path.join(bkp_root, get_bkp_path(p[1:] if p.startswith(("\\", "/")) else p))
+            if os.path.exists(sd):
+                # Source Dir Exists
+                if os.path.isfile(sd):
+                    if os.path.exists(fp):
+                        if os.stat(sd).st_mtime > os.stat(fp).st_mtime + 1 or b.get('force_backup', False):
+                            file_list.append(dict(type="update", sfile=sd, dfilepath=fp, diffsize=abs(os.stat(fp).st_size - os.stat(sd).st_size)))
+                            space_req += os.stat(fp).st_size - os.stat(sd).st_size
+                            bytes_to_modify += abs(os.stat(fp).st_size - os.stat(sd).st_size)
+                    else:
+                        file_list.append(dict(type="create", sfile=sd, dfilepath=fp, diffsize=os.stat(sd).st_size))
+                        space_req += os.stat(sd).st_size
+                        bytes_to_modify += os.stat(sd).st_size
                 else:
-                    file_list.append(dict(type="create", sfile=sd, dfilepath=fp, diffsize=os.stat(sd).st_size))
-                    space_req += os.stat(sd).st_size
-                    bytes_to_modify += os.stat(sd).st_size
-            else:
-                for f in recursive_fileiter(sd):
-                    fspldrv = os.path.splitdrive(f.path)[1]
-                    fp = os.path.join(bkp_root, get_bkp_path(fspldrv[1:] if fspldrv.startswith(("\\", "/")) else fspldrv))
-                    if not launch_args.args.nooutput:
-                        if reprint_temp[3] != sd:
-                            clear_terminal()
-                            print("Checking Files for changes:")
-                            print("Reading {0}".format(sd))
-                            print("{0}/{1}. {2} Required Changes Indexed.".format(n, len(allbkps), len(file_list)), end='\r', flush=True)
-                            reprint_temp = [n, len(allbkps), len(file_list), sd]
-                        else:
-                            if reprint_temp[0] != n or reprint_temp[1] != len(allbkps) or reprint_temp[2] != len(file_list):
+                    for f in recursive_fileiter(sd):
+                        fspldrv = os.path.splitdrive(f.path)[1]
+                        fp = os.path.join(bkp_root, get_bkp_path(fspldrv[1:] if fspldrv.startswith(("\\", "/")) else fspldrv))
+                        if not launch_args.args.nooutput:
+                            if reprint_temp[3] != sd:
+                                clear_terminal()
+                                print("Checking Files for changes:")
+                                print("Reading {0}".format(sd))
                                 print("{0}/{1}. {2} Required Changes Indexed.".format(n, len(allbkps), len(file_list)), end='\r', flush=True)
                                 reprint_temp = [n, len(allbkps), len(file_list), sd]
-                    if f.is_file():
-                        if os.path.exists(fp):
-                            if os.stat(f.path).st_mtime > os.stat(fp).st_mtime + 1 or b.get('force_backup', False):
-                                file_list.append(dict(type="update", sfile=f.path, dfilepath=fp, diffsize=abs(os.stat(f.path).st_size - os.stat(fp).st_size)))
-                                space_req += os.stat(f.path).st_size - os.stat(fp).st_size
-                                bytes_to_modify += abs(os.stat(f.path).st_size - os.stat(fp).st_size)
-                        else:
-                            file_list.append(dict(type="create", sfile=f.path, dfilepath=fp, diffsize=os.stat(f.path).st_size))
-                            space_req += os.stat(f.path).st_size
-                            bytes_to_modify += os.stat(f.path).st_size
-                if b.get('snapshot_mode', False):
-                    rnodrivetd = os.path.splitdrive(sd)[1]
-                    if os.path.exists(os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd))):
-                        for f in recursive_fileiter(os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd))):
-                            rsflunod = os.path.splitdrive(f.path)[1]
-                            sf = get_src_path(sd, rsflunod)
-                            if not launch_args.args.nooutput:
-                                if reprint_temp[3] != os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd)):
-                                    clear_terminal()
-                                    print("Checking Files for changes:")
-                                    print("Reading {0}".format(os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd))))
-                                    print("{0}/{1}. {2} Required Changes Indexed.".format(n, len(allbkps), len(file_list)), end="\r")
-                                    reprint_temp = [n, len(allbkps), len(file_list), os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd))]
-                                else:
-                                    if reprint_temp[0] != n or reprint_temp[1] != len(allbkps) or reprint_temp[2] != len(file_list):
+                            else:
+                                if reprint_temp[0] != n or reprint_temp[1] != len(allbkps) or reprint_temp[2] != len(file_list):
+                                    print("{0}/{1}. {2} Required Changes Indexed.".format(n, len(allbkps), len(file_list)), end='\r', flush=True)
+                                    reprint_temp = [n, len(allbkps), len(file_list), sd]
+                        if f.is_file():
+                            if os.path.exists(fp):
+                                if os.stat(f.path).st_mtime > os.stat(fp).st_mtime + 1 or b.get('force_backup', False):
+                                    file_list.append(dict(type="update", sfile=f.path, dfilepath=fp, diffsize=abs(os.stat(f.path).st_size - os.stat(fp).st_size)))
+                                    space_req += os.stat(f.path).st_size - os.stat(fp).st_size
+                                    bytes_to_modify += abs(os.stat(f.path).st_size - os.stat(fp).st_size)
+                            else:
+                                file_list.append(dict(type="create", sfile=f.path, dfilepath=fp, diffsize=os.stat(f.path).st_size))
+                                space_req += os.stat(f.path).st_size
+                                bytes_to_modify += os.stat(f.path).st_size
+                    if b.get('snapshot_mode', False):
+                        rnodrivetd = os.path.splitdrive(sd)[1]
+                        if os.path.exists(os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd))):
+                            for f in recursive_fileiter(os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd))):
+                                rsflunod = os.path.splitdrive(f.path)[1]
+                                sf = get_src_path(sd, rsflunod)
+                                if not launch_args.args.nooutput:
+                                    if reprint_temp[3] != os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd)):
+                                        clear_terminal()
+                                        print("Checking Files for changes:")
+                                        print("Reading {0}".format(os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd))))
                                         print("{0}/{1}. {2} Required Changes Indexed.".format(n, len(allbkps), len(file_list)), end="\r")
                                         reprint_temp = [n, len(allbkps), len(file_list), os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd))]
-                            if not os.path.exists(sf):
-                                file_list.append(dict(type="remove" if os.path.isfile(f.path) else "removef", sfile=f.path, dfilepath=f.path, diffsize=os.stat(f.path).st_size))
-                                space_req += -os.stat(f.path).st_size
-                                bytes_to_modify += os.stat(f.path).st_size
-                        for f in recursive_folderiter(os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd))):
-                            rsflunod = os.path.splitdrive(f.path)[1]
-                            sf = get_src_path(sd, rsflunod)
-                            if not os.path.exists(sf):
-                                file_list.append(dict(type="remove" if os.path.isfile(f.path) else "removef", sfile=f.path, dfilepath=f.path, diffsize=os.stat(f.path).st_size))
-                                space_req += -os.stat(f.path).st_size
-                                bytes_to_modify += os.stat(f.path).st_size
-        else:
-            if b.get('snapshot_mode', False):
-                if os.path.exists(fp):
-                    file_list.append(dict(type="remove" if os.path.isfile(fp) else "removef", sfile=fp, dfilepath=fp, diffsize=os.stat(fp).st_size))
-                    space_req += -os.stat(fp).st_size
-                    bytes_to_modify += os.stat(fp).st_size
+                                    else:
+                                        if reprint_temp[0] != n or reprint_temp[1] != len(allbkps) or reprint_temp[2] != len(file_list):
+                                            print("{0}/{1}. {2} Required Changes Indexed.".format(n, len(allbkps), len(file_list)), end="\r")
+                                            reprint_temp = [n, len(allbkps), len(file_list), os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd))]
+                                if not os.path.exists(sf):
+                                    file_list.append(dict(type="remove" if os.path.isfile(f.path) else "removef", sfile=f.path, dfilepath=f.path, diffsize=os.stat(f.path).st_size))
+                                    space_req += -os.stat(f.path).st_size
+                                    bytes_to_modify += os.stat(f.path).st_size
+                            for f in recursive_folderiter(os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd))):
+                                rsflunod = os.path.splitdrive(f.path)[1]
+                                sf = get_src_path(sd, rsflunod)
+                                if not os.path.exists(sf):
+                                    file_list.append(dict(type="remove" if os.path.isfile(f.path) else "removef", sfile=f.path, dfilepath=f.path, diffsize=os.stat(f.path).st_size))
+                                    space_req += -os.stat(f.path).st_size
+                                    bytes_to_modify += os.stat(f.path).st_size
             else:
-                add_error("{} Backup Source is Unavailable.".format(sd), wait_time=1)
+                if b.get('snapshot_mode', False):
+                    if os.path.exists(fp):
+                        file_list.append(dict(type="remove" if os.path.isfile(fp) else "removef", sfile=fp, dfilepath=fp, diffsize=os.stat(fp).st_size))
+                        space_req += -os.stat(fp).st_size
+                        bytes_to_modify += os.stat(fp).st_size
+                else:
+                    add_error("{} Backup Source is Unavailable.".format(sd), wait_time=1)
+        except Exception as e:
+            add_error(f"Scanning File {sd} raised an exception: {e.__class__.__name__}: {e.args}")
     if len(file_list) > 0:
         clear_terminal()
         print("{0} Changes Required. {1} Updates, {2} Creations, {3} Removals. {4} I/OAction Size".format(len(file_list),
