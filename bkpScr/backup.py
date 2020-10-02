@@ -291,25 +291,29 @@ def get_progress_bar(perc: float):
 def recursive_fileiter(sdir):
     ret = list()
     folders = list()
-    for f in os.scandir(sdir):
-        try:
-            if f.is_dir():
-                folders.append(f.path)
-        except FileNotFoundError as e:
-            if os.path.islink(e.filename) or Path(e.filename).is_symlink():
-                add_error(f"Folder {e.filename} was found but it apparently is a {'sym' if Path(e.filename).is_symlink() else ''}link that cannot be reached. {e.__class__.__name__} {e.args}")
-        except:
-            raise
-    for folder in folders:
-        ret.extend(recursive_fileiter(folder))
-    if os.path.isfile(sdir):
-        ret.append(sdir)
-    for item in os.scandir(sdir):
-        try:
-            if item.is_file():
-                ret.append(item)
-        except Exception as e:
-            add_error(f"Scanning File {item.filename} raised an exception: {e.__class__.__name__}: {e.args}")
+    if os.path.exists(sdir):
+        for f in os.scandir(sdir):
+            try:
+                if f.is_dir():
+                    folders.append(f.path)
+            except FileNotFoundError as e:
+                if os.path.islink(e.filename) or Path(e.filename).is_symlink():
+                    add_error(f"Folder {e.filename} was found but it apparently is a {'sym' if Path(e.filename).is_symlink() else ''}link that cannot be reached. {e.__class__.__name__} {e.args}")
+        for folder in folders:
+            ret.extend(recursive_fileiter(folder))
+        if os.path.isfile(sdir):
+            ret.append(sdir)
+        for item in os.scandir(sdir):
+            try:
+                if item.is_file():
+                    ret.append(item)
+            except FileNotFoundError as e:
+                if os.path.islink(e.filename) or Path(e.filename).is_symlink():
+                    add_error(f"File {e.filename} | {item.filename} was found but it apparently is a {'sym' if Path(e.filename).is_symlink() else ''}link that cannot be reached. {e.__class__.__name__} {e.args}")
+            except Exception as e:
+                add_error(f"Scanning File {item.filename} raised an exception: {e.__class__.__name__}: {e.args}")
+    else:
+        add_error(f"Recursive FileIter could not find {sdir}", 2)
     return ret
 
 def recursive_folderiter(sdir):
@@ -441,7 +445,7 @@ def process():
                 else:
                     add_error("{} Backup Source is Unavailable.".format(sd), wait_time=1)
         except Exception as e:
-            add_error(f"Scanning File {sd} raised an exception: {e.__class__.__name__}: {e.args}")
+            add_error(f"Scanning File {sd} raised an exception: {e.__traceback__.tb_lineno} | {e.__class__.__name__}: {e.args}")
     if len(file_list) > 0:
         clear_terminal()
         print("{0} Changes Required. {1} Updates, {2} Creations, {3} Removals. {4} I/OAction Size".format(len(file_list),
