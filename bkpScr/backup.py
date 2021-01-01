@@ -19,6 +19,8 @@ class Arguments(object):
 
     def update_args(self, args):
         self.args = args
+
+
 launch_args = Arguments()
 
 try:
@@ -92,6 +94,7 @@ except Exception as e:
 def get_cur_dt():
     return datetime.datetime.now(shift_tz)
 
+
 bkp_root = config['local_backup_root_folder']
 shift_tz = datetime.timezone(datetime.timedelta(hours=config['tz'].get('hours', 0), minutes=config['tz'].get('minutes', 0)))
 path_reduction = config.get('path_reduction', None)
@@ -136,7 +139,7 @@ def is_latest_version():
         return None
 
 def dl_update():
-    Github_Raw_links = [
+    github_raw_links = [
         {
             "url": LATEST_VER_DATA_URL,
             "type": "json",
@@ -149,7 +152,7 @@ def dl_update():
         }
     ]
     try:
-        for filedata in Github_Raw_links:
+        for filedata in github_raw_links:
             with urllib.request.urlopen(filedata['url']) as dld_data:
                 if filedata['type'] == "json":
                     j = json.loads(dld_data.read().decode())
@@ -169,6 +172,7 @@ def dl_update():
             time.sleep(1)
         python = sys.executable
         os.execl(python, python, *sys.argv)
+
 
 log = []
 errors_list = []
@@ -244,34 +248,34 @@ def pathsplitall(path):
     return allparts
 
 def get_bkp_path(nodrivepath: str):
-    splitPath: list = pathsplitall(nodrivepath)
-    splitPath = list(filter(lambda x: ":" not in x, splitPath))
+    split_path: list = pathsplitall(nodrivepath)
+    split_path = list(filter(lambda x: ":" not in x, split_path))
     try:
-        splitPath.remove(" ")
+        split_path.remove(" ")
     except:
         pass
-    splitPath = splitPath[path_reduction::]
+    split_path = split_path[path_reduction::]
     ret = ""
-    for p in splitPath:
+    for p in split_path:
         ret = os.path.join(ret, p)
     return ret
 
 def get_src_path(srcpath: str, nodrivepath: str):
-    splitSrcPath: list = pathsplitall(srcpath)
-    splitPath: list = pathsplitall(nodrivepath)
-    splitPath = list(filter(lambda x: ":" not in x, splitPath))
+    split_src_path: list = pathsplitall(srcpath)
+    split_path: list = pathsplitall(nodrivepath)
+    split_path = list(filter(lambda x: ":" not in x, split_path))
     try:
-        splitSrcPath.remove(" ")
+        split_src_path.remove(" ")
     except:
         pass
     try:
-        splitPath.remove(" ")
+        split_path.remove(" ")
     except:
         pass
-    splitSrcPath = splitSrcPath[:path_reduction+1 if path_reduction is not None else 1:]
-    splitSrcPath.extend(splitPath[path_reduction+1 if path_reduction is not None else 1::])
+    split_src_path = split_src_path[:path_reduction+1 if path_reduction is not None else 1:]
+    split_src_path.extend(split_path[path_reduction+1 if path_reduction is not None else 1::])
     ret = ""
-    for p in splitSrcPath:
+    for p in split_src_path:
         ret = os.path.join(ret, p)
     return ret
 
@@ -293,31 +297,34 @@ def recursive_fileiter(sdir):
     folders = list()
     if os.path.exists(sdir):
         for f in os.scandir(sdir):
+            f: os.DirEntry
             try:
                 if f.is_dir():
                     folders.append(f.path)
-            except FileNotFoundError as e:
-                if os.path.islink(e.filename) or Path(e.filename).is_symlink():
-                    add_error(f"Folder {e.filename} was found but it apparently is a {'sym' if Path(e.filename).is_symlink() else ''}link that cannot be reached. {e.__class__.__name__} {e.args}")
+            except FileNotFoundError as _e:
+                if os.path.islink(_e.filename) or Path(_e.filename).is_symlink():
+                    add_error(f"Folder {_e.filename} was found but it apparently is a {'sym' if Path(_e.filename).is_symlink() else ''}link that cannot be reached. {_e.__class__.__name__} {_e.args}")
         for folder in folders:
             ret.extend(recursive_fileiter(folder))
         if os.path.isfile(sdir):
             ret.append(sdir)
         for item in os.scandir(sdir):
+            item: os.DirEntry
             try:
                 if item.is_file():
                     ret.append(item)
-            except FileNotFoundError as e:
-                if os.path.islink(e.filename) or Path(e.filename).is_symlink():
-                    add_error(f"File {e.filename} | {item.filename} was found but it apparently is a {'sym' if Path(e.filename).is_symlink() else ''}link that cannot be reached. {e.__class__.__name__} {e.args}")
-            except Exception as e:
-                add_error(f"Scanning File {item.filename} raised an exception: {e.__class__.__name__}: {e.args}")
+            except FileNotFoundError as _e:
+                if os.path.islink(_e.filename) or Path(_e.filename).is_symlink():
+                    add_error(f"File {_e.filename} | {item.name} was found but it apparently is a {'sym' if Path(_e.filename).is_symlink() else ''}link that cannot be reached. {_e.__class__.__name__} {_e.args}")
+            except Exception as _e:
+                add_error(f"Scanning File {item.name} raised an exception: {_e.__class__.__name__}: {_e.args}")
     else:
         add_error(f"Recursive FileIter could not find {sdir}", 2)
     return ret
 
 def recursive_folderiter(sdir):
     ret = list()
+    f: os.DirEntry
     subfolders = [f for f in os.scandir(sdir) if f.is_dir()]
     ret.extend(subfolders)
     for folder in subfolders:
@@ -444,8 +451,8 @@ def process():
                         bytes_to_modify += os.stat(fp).st_size
                 else:
                     add_error("{} Backup Source is Unavailable.".format(sd), wait_time=1)
-        except Exception as e:
-            add_error(f"Scanning File {sd} raised an exception: {e.__traceback__.tb_lineno} | {e.__class__.__name__}: {e.args}")
+        except Exception as _e:
+            add_error(f"Scanning File {sd} raised an exception: {_e.__traceback__.tb_lineno} | {_e.__class__.__name__}: {_e.args}")
     if len(file_list) > 0:
         clear_terminal()
         print("{0} Changes Required. {1} Updates, {2} Creations, {3} Removals. {4} I/OAction Size".format(len(file_list),
@@ -531,6 +538,7 @@ def process():
         print("{0}/{0}. {1} Required Changes Indexed.".format(len(allbkps), len(file_list)))
         print("No Changes Found")
         time.sleep(2)
+
 
 finished_init = False
 def start_menu():
@@ -627,11 +635,15 @@ def start_menu():
     if len(errors_list) > 0:
         print(f"Encountered {len(errors_list)} errors.")
         time.sleep(2)
-        ulp = os.path.join("bkpLogs", str(start_dt.date()))
-        os.system("start " + os.path.join(ulp, 'errors.log').replace('\\', '/'))
+        if args.nologs:
+            print("\n".join(errors_list))
+        else:
+            ulp = os.path.join("bkpLogs", str(start_dt.date()))
+            os.system("start " + os.path.join(ulp, 'errors.log').replace('\\', '/'))
     if not args.nopause:
         os.system("pause")
     sys.exit()
+
 
 if __name__ == "__main__":
     try:
