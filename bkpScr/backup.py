@@ -9,6 +9,7 @@ import socket
 import urllib.request
 import argparse
 import locale
+import platform
 from pathlib import Path
 
 HARD_CONFIG_VER = 1
@@ -184,7 +185,7 @@ file_changes = {
     "removef": [],
     "folder": []
 }
-file_list = list()
+file_list = set()
 def add_log(log_text: str, end: str = "\n", should_print=True, wait_time: float = 0):
     if should_print:
         print(log_text, end=end)
@@ -211,8 +212,135 @@ def add_file_change(change_type: str, change_text: str, should_print=True, wait_
     else:
         add_error("Incorrect file change type passed {}.".format(change_type), 2.0)
 
+class ANSIEscape(object):
+    ESC = "\x1b"
+    CSI = "\x1b["
+    OSC = "\x1b]"
+    CONTROLSYMBOL_clear_after_cursor = "\x1b[0K"
+
+    @staticmethod
+    def enable_ansi_escape():
+        if os.name == 'nt' and platform.release() == '10' and platform.version() >= '10.0.14393':
+            import ctypes
+            from ctypes import wintypes
+            try:
+                kernel32 = ctypes.windll.kernel32
+                outhandle = kernel32.GetStdHandle(-11)
+                kernel32.SetConsoleMode(outhandle, 7)
+            except WindowsError as e:
+                if e.winerror == 0x0057:  # ERROR_INVALID_PARAMETER
+                    raise NotImplementedError
+                raise
+        elif os.name == 'posix':
+            pass
+        else:
+            raise OSError("ANSI Escape Character Support is Unavailable.")
+
+    @staticmethod
+    def is_ansi_escape_available():
+        if os.name == 'nt' and platform.release() == '10' and platform.version() >= '10.0.14393':
+            return True
+        elif os.name == 'posix':
+            return True
+        return False
+
+    @staticmethod
+    def is_ansi_escape_enabled():
+        if os.name == 'nt' and platform.release() == '10' and platform.version() >= '10.0.14393':
+            import ctypes
+            from ctypes import wintypes
+            kernel32 = ctypes.WinDLL('kernel32')
+            mode = wintypes.DWORD()
+            kernel32.GetConsoleMode(kernel32.GetStdHandle(-11), ctypes.byref(mode))
+            return (mode.value & 0x0004) > 0
+        elif os.name == 'posix':
+            return True
+        return False
+
+    @staticmethod
+    def ansi_escape_ready():
+        if ANSIEscape.is_ansi_escape_enabled():
+            return True
+        if ANSIEscape.is_ansi_escape_available():
+            try:
+                ANSIEscape.enable_ansi_escape()
+                return True
+            except:
+                pass
+        return False
+
+    @staticmethod
+    def set_cursor_to_top_line():
+        sys.__stdout__.write(f'{ANSIEscape.CSI}H\r')
+        sys.__stdout__.flush()
+
+    @staticmethod
+    def set_cursor_pos(column: int = 1, line: int = 1):
+        sys.__stdout__.write(f"{ANSIEscape.CSI}{line};{column}f")
+        sys.__stdout__.flush()
+
+    @staticmethod
+    def save_cursor_pos(restore: bool = False):
+        sys.__stdout__.write(f"{ANSIEscape.CSI}{'u' if restore else 's'}")
+        sys.__stdout__.flush()
+
+    @staticmethod
+    def move_cursor_n_lines(lines: int = 1, up: bool = True):
+        """
+        Moves the cursor to the beginning of the line n lines up/down
+        """
+        sys.__stdout__.write(f"{ANSIEscape.CSI}{lines}{'F' if up else 'E'}")
+        sys.__stdout__.flush()
+
+    @staticmethod
+    def move_cursor(vertical: int = 0, horizontal: int = 0):
+        if vertical != 0:
+            up = vertical > 0
+            sys.__stdout__.write(f"{ANSIEscape.CSI}{abs(vertical)}{'A' if up else 'B'}")
+        if horizontal != 0:
+            right = horizontal > 0
+            sys.__stdout__.write(f"{ANSIEscape.CSI}{abs(horizontal)}{'C' if right else 'D'}")
+        sys.__stdout__.flush()
+
+    @staticmethod
+    def move_cursor_to_column(column: int = 1):
+        sys.__stdout__.write(f"{ANSIEscape.CSI}{column}G")
+        sys.__stdout__.flush()
+
+    @staticmethod
+    def set_cursor_display(show: bool = True):
+        sys.__stdout__.write(f'{ANSIEscape.CSI}?25{"h" if show else "l"}')
+        sys.__stdout__.flush()
+
+    @staticmethod
+    def set_cursor_blinking(enable: bool = True):
+        sys.__stdout__.write(f'{ANSIEscape.CSI}?12{"h" if enable else "l"}')
+        sys.__stdout__.flush()
+
+    @staticmethod
+    def delete_lines(num: int = 1):
+        if num - 1 > 0:
+            ANSIEscape.move_cursor_n_lines(num - 1, False)
+        sys.__stdout__.write(f"{ANSIEscape.CSI}{num}M")
+        sys.__stdout__.flush()
+
+    @staticmethod
+    def clear_current_line(after_cursor: bool = False):
+        sys.__stdout__.write(f"{ANSIEscape.CSI}{'0' if after_cursor else '2'}K")
+        sys.__stdout__.flush()
+
+    @staticmethod
+    def clear_console_text():
+        sys.__stdout__.write(f'{ANSIEscape.CSI}H\r')
+        sys.__stdout__.write(f'{ANSIEscape.CSI}J\r')
+        sys.__stdout__.flush()
+
 def clear_terminal():
-    os.system('cls' if os.name == 'nt' else 'clear')
+    if ANSIEscape.ansi_escape_ready():
+        ANSIEscape.clear_console_text()
+    else:
+        os.system('cls' if sys.platform.lower() == "win32" else 'clear')
+        sys.stdout.flush()
 
 def del_file_or_dir(path):
     try:
@@ -383,11 +511,11 @@ def process():
                 if os.path.isfile(sd):
                     if os.path.exists(fp):
                         if os.stat(sd).st_mtime > os.stat(fp).st_mtime + 1 or b.get('force_backup', False):
-                            file_list.append(dict(type="update", sfile=sd, dfilepath=fp, diffsize=abs(os.stat(fp).st_size - os.stat(sd).st_size)))
+                            file_list.add(dict(type="update", sfile=sd, dfilepath=fp, diffsize=abs(os.stat(fp).st_size - os.stat(sd).st_size)))
                             space_req += os.stat(fp).st_size - os.stat(sd).st_size
                             bytes_to_modify += abs(os.stat(fp).st_size - os.stat(sd).st_size)
                     else:
-                        file_list.append(dict(type="create", sfile=sd, dfilepath=fp, diffsize=os.stat(sd).st_size))
+                        file_list.add(dict(type="create", sfile=sd, dfilepath=fp, diffsize=os.stat(sd).st_size))
                         space_req += os.stat(sd).st_size
                         bytes_to_modify += os.stat(sd).st_size
                 else:
@@ -408,11 +536,11 @@ def process():
                         if f.is_file():
                             if os.path.exists(fp):
                                 if os.stat(f.path).st_mtime > os.stat(fp).st_mtime + 1 or b.get('force_backup', False):
-                                    file_list.append(dict(type="update", sfile=f.path, dfilepath=fp, diffsize=abs(os.stat(f.path).st_size - os.stat(fp).st_size)))
+                                    file_list.add(dict(type="update", sfile=f.path, dfilepath=fp, diffsize=abs(os.stat(f.path).st_size - os.stat(fp).st_size)))
                                     space_req += os.stat(f.path).st_size - os.stat(fp).st_size
                                     bytes_to_modify += abs(os.stat(f.path).st_size - os.stat(fp).st_size)
                             else:
-                                file_list.append(dict(type="create", sfile=f.path, dfilepath=fp, diffsize=os.stat(f.path).st_size))
+                                file_list.add(dict(type="create", sfile=f.path, dfilepath=fp, diffsize=os.stat(f.path).st_size))
                                 space_req += os.stat(f.path).st_size
                                 bytes_to_modify += os.stat(f.path).st_size
                     if b.get('snapshot_mode', False):
@@ -433,20 +561,20 @@ def process():
                                             print("{0}/{1}. {2} Required Changes Indexed.".format(n, len(allbkps), len(file_list)), end="\r")
                                             reprint_temp = [n, len(allbkps), len(file_list), os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd))]
                                 if not os.path.exists(sf):
-                                    file_list.append(dict(type="remove" if os.path.isfile(f.path) else "removef", sfile=f.path, dfilepath=f.path, diffsize=os.stat(f.path).st_size))
+                                    file_list.add(dict(type="remove" if os.path.isfile(f.path) else "removef", sfile=f.path, dfilepath=f.path, diffsize=os.stat(f.path).st_size))
                                     space_req += -os.stat(f.path).st_size
                                     bytes_to_modify += os.stat(f.path).st_size
                             for f in recursive_folderiter(os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd))):
                                 rsflunod = os.path.splitdrive(f.path)[1]
                                 sf = get_src_path(sd, rsflunod)
                                 if not os.path.exists(sf):
-                                    file_list.append(dict(type="remove" if os.path.isfile(f.path) else "removef", sfile=f.path, dfilepath=f.path, diffsize=os.stat(f.path).st_size))
+                                    file_list.add(dict(type="remove" if os.path.isfile(f.path) else "removef", sfile=f.path, dfilepath=f.path, diffsize=os.stat(f.path).st_size))
                                     space_req += -os.stat(f.path).st_size
                                     bytes_to_modify += os.stat(f.path).st_size
             else:
                 if b.get('snapshot_mode', False):
                     if os.path.exists(fp):
-                        file_list.append(dict(type="remove" if os.path.isfile(fp) else "removef", sfile=fp, dfilepath=fp, diffsize=os.stat(fp).st_size))
+                        file_list.add(dict(type="remove" if os.path.isfile(fp) else "removef", sfile=fp, dfilepath=fp, diffsize=os.stat(fp).st_size))
                         space_req += -os.stat(fp).st_size
                         bytes_to_modify += os.stat(fp).st_size
                 else:
@@ -646,6 +774,7 @@ def start_menu():
 
 
 if __name__ == "__main__":
+    ANSIEscape.ansi_escape_ready()
     try:
         start_menu()
     except Exception as e:
