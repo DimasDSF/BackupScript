@@ -185,7 +185,7 @@ file_changes = {
     "removef": [],
     "folder": []
 }
-file_list = set()
+file_list = list()
 def add_log(log_text: str, end: str = "\n", should_print=True, wait_time: float = 0):
     if should_print:
         print(log_text, end=end)
@@ -511,11 +511,11 @@ def process():
                 if os.path.isfile(sd):
                     if os.path.exists(fp):
                         if os.stat(sd).st_mtime > os.stat(fp).st_mtime + 1 or b.get('force_backup', False):
-                            file_list.add(dict(type="update", sfile=sd, dfilepath=fp, diffsize=abs(os.stat(fp).st_size - os.stat(sd).st_size)))
+                            file_list.append(dict(type="update", sfile=sd, dfilepath=fp, diffsize=abs(os.stat(fp).st_size - os.stat(sd).st_size)))
                             space_req += os.stat(fp).st_size - os.stat(sd).st_size
                             bytes_to_modify += abs(os.stat(fp).st_size - os.stat(sd).st_size)
                     else:
-                        file_list.add(dict(type="create", sfile=sd, dfilepath=fp, diffsize=os.stat(sd).st_size))
+                        file_list.append(dict(type="create", sfile=sd, dfilepath=fp, diffsize=os.stat(sd).st_size))
                         space_req += os.stat(sd).st_size
                         bytes_to_modify += os.stat(sd).st_size
                 else:
@@ -536,11 +536,11 @@ def process():
                         if f.is_file():
                             if os.path.exists(fp):
                                 if os.stat(f.path).st_mtime > os.stat(fp).st_mtime + 1 or b.get('force_backup', False):
-                                    file_list.add(dict(type="update", sfile=f.path, dfilepath=fp, diffsize=abs(os.stat(f.path).st_size - os.stat(fp).st_size)))
+                                    file_list.append(dict(type="update", sfile=f.path, dfilepath=fp, diffsize=abs(os.stat(f.path).st_size - os.stat(fp).st_size)))
                                     space_req += os.stat(f.path).st_size - os.stat(fp).st_size
                                     bytes_to_modify += abs(os.stat(f.path).st_size - os.stat(fp).st_size)
                             else:
-                                file_list.add(dict(type="create", sfile=f.path, dfilepath=fp, diffsize=os.stat(f.path).st_size))
+                                file_list.append(dict(type="create", sfile=f.path, dfilepath=fp, diffsize=os.stat(f.path).st_size))
                                 space_req += os.stat(f.path).st_size
                                 bytes_to_modify += os.stat(f.path).st_size
                     if b.get('snapshot_mode', False):
@@ -561,20 +561,20 @@ def process():
                                             print("{0}/{1}. {2} Required Changes Indexed.".format(n, len(allbkps), len(file_list)), end="\r")
                                             reprint_temp = [n, len(allbkps), len(file_list), os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd))]
                                 if not os.path.exists(sf):
-                                    file_list.add(dict(type="remove" if os.path.isfile(f.path) else "removef", sfile=f.path, dfilepath=f.path, diffsize=os.stat(f.path).st_size))
+                                    file_list.append(dict(type="remove" if os.path.isfile(f.path) else "removef", sfile=f.path, dfilepath=f.path, diffsize=os.stat(f.path).st_size))
                                     space_req += -os.stat(f.path).st_size
                                     bytes_to_modify += os.stat(f.path).st_size
                             for f in recursive_folderiter(os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd))):
                                 rsflunod = os.path.splitdrive(f.path)[1]
                                 sf = get_src_path(sd, rsflunod)
                                 if not os.path.exists(sf):
-                                    file_list.add(dict(type="remove" if os.path.isfile(f.path) else "removef", sfile=f.path, dfilepath=f.path, diffsize=os.stat(f.path).st_size))
+                                    file_list.append(dict(type="remove" if os.path.isfile(f.path) else "removef", sfile=f.path, dfilepath=f.path, diffsize=os.stat(f.path).st_size))
                                     space_req += -os.stat(f.path).st_size
                                     bytes_to_modify += os.stat(f.path).st_size
             else:
                 if b.get('snapshot_mode', False):
                     if os.path.exists(fp):
-                        file_list.add(dict(type="remove" if os.path.isfile(fp) else "removef", sfile=fp, dfilepath=fp, diffsize=os.stat(fp).st_size))
+                        file_list.append(dict(type="remove" if os.path.isfile(fp) else "removef", sfile=fp, dfilepath=fp, diffsize=os.stat(fp).st_size))
                         space_req += -os.stat(fp).st_size
                         bytes_to_modify += os.stat(fp).st_size
                 else:
