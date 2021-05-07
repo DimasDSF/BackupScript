@@ -12,6 +12,8 @@ import locale
 import platform
 from pathlib import Path
 
+from typing import Dict, Set, List, Optional
+
 HARD_CONFIG_VER = 1
 LATEST_VER_DATA_URL = "https://raw.githubusercontent.com/DimasDSF/BackupScript/master/bkpScr/version.json"
 class Arguments(object):
@@ -95,122 +97,9 @@ except Exception as e:
 def get_cur_dt():
     return datetime.datetime.now(shift_tz)
 
-
-bkp_root = config['local_backup_root_folder']
-shift_tz = datetime.timezone(datetime.timedelta(hours=config['tz'].get('hours', 0), minutes=config['tz'].get('minutes', 0)))
-path_reduction = config.get('path_reduction', None)
-path_reduction = None if path_reduction == 0 else path_reduction
-notzformat = '{:%d-%m-%Y %H:%M:%S}'
-
-#####################################################
-# Version Check
-#####################################################
-def connection_available(timeout=3):
-    """
-    Check if Internet Connection is available
-    """
-    try:
-        socket.setdefaulttimeout(timeout)
-        socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect(("8.8.8.8", 53))
-        return True
-    except socket.error:
-        return False
-
-def is_latest_version():
-    if connection_available():
-        try:
-            if LATEST_VER_DATA_URL != "":
-                with urllib.request.urlopen(LATEST_VER_DATA_URL) as url:
-                    vdata = json.loads(url.read().decode())
-        except:
-            return None
-        else:
-            try:
-                latest_cr: str = vdata.get("coderev", "Unavailable")
-                current_cr: str = version.get('coderev', "Unavailable")
-                if latest_cr.isnumeric() and current_cr.isnumeric():
-                    if int(current_cr) == int(latest_cr):
-                        return [True, vdata, False]
-                    elif int(current_cr) > int(latest_cr):
-                        return [True, vdata, True]
-            except:
-                return None
-        return [False, vdata, False]
-    else:
-        return None
-
-def dl_update():
-    github_raw_links = [
-        {
-            "url": LATEST_VER_DATA_URL,
-            "type": "json",
-            "name": "version.json"
-        },
-        {
-            "url": "https://raw.githubusercontent.com/DimasDSF/BackupScript/master/bkpScr/backup.py",
-            "type": "py",
-            "name": "backup.py"
-        }
-    ]
-    try:
-        for filedata in github_raw_links:
-            with urllib.request.urlopen(filedata['url']) as dld_data:
-                if filedata['type'] == "json":
-                    j = json.loads(dld_data.read().decode())
-                    with open(os.path.join(os.path.dirname(os.path.realpath(__file__)), filedata['name']), "w+") as dl:
-                        json.dump(j, dl, indent=4)
-                elif filedata['type'] == "py":
-                    with open(os.path.join(os.path.dirname(os.path.realpath(__file__)), filedata['name']), "w+") as dl:
-                        text = dld_data.read().decode(encoding=locale.getdefaultlocale()[1])
-                        dl.write(text)
-    except Exception as update_exception:
-        print("Update Failed due to an Exception: {0} / {1}".format(type(update_exception).__name__, update_exception.args))
-    else:
-        print("Update Finished.\nRestarting", end="")
-        for t in range(3):
-            print(".", end="")
-            sys.stdout.flush()
-            time.sleep(1)
-        python = sys.executable
-        os.execl(python, python, *sys.argv)
-
-
-log = []
-errors_list = []
-file_changes = {
-    "update": [],
-    "rename": [],
-    "create": [],
-    "remove": [],
-    "removef": [],
-    "folder": []
-}
-file_list = list()
-def add_log(log_text: str, end: str = "\n", should_print=True, wait_time: float = 0):
-    if should_print:
-        print(log_text, end=end)
-        if "\r" in end:
-            sys.stdout.flush()
-    log.append("\n{0}:\n{1}".format(notzformat.format(get_cur_dt()), log_text))
-    if wait_time != 0:
-        time.sleep(wait_time)
-
-def add_error(error_text: str, wait_time: float = 0):
-    errors_list.append("\n{}".format(error_text))
-    if not launch_args.args.nooutput:
-        print(error_text)
-        if wait_time != 0:
-            time.sleep(wait_time)
-
-def add_file_change(change_type: str, change_text: str, should_print=True, wait_time: float = 0):
-    if change_type in file_changes.keys():
-        if should_print:
-            print(change_text)
-        file_changes[change_type].append("\n{}".format(change_text))
-        if wait_time != 0:
-            time.sleep(wait_time)
-    else:
-        add_error("Incorrect file change type passed {}.".format(change_type), 2.0)
+############################
+#        CLI Utils         #
+############################
 
 class ANSIEscape(object):
     ESC = "\x1b"
@@ -227,8 +116,8 @@ class ANSIEscape(object):
                 kernel32 = ctypes.windll.kernel32
                 outhandle = kernel32.GetStdHandle(-11)
                 kernel32.SetConsoleMode(outhandle, 7)
-            except WindowsError as e:
-                if e.winerror == 0x0057:  # ERROR_INVALID_PARAMETER
+            except WindowsError as exc:
+                if exc.winerror == 0x0057:  # ERROR_INVALID_PARAMETER
                     raise NotImplementedError
                 raise
         elif os.name == 'posix':
@@ -342,6 +231,317 @@ def clear_terminal():
         os.system('cls' if sys.platform.lower() == "win32" else 'clear')
         sys.stdout.flush()
 
+def get_progress_bar(perc: float):
+    status_slots = 50
+    status_bars = math.floor((perc / 100) * status_slots)
+    status_line = '['
+    for n in range(status_bars):
+        status_line = status_line + '░'
+    if math.floor(status_slots - status_bars) > 0:
+        for n in range(status_slots - status_bars):
+            status_line = status_line + ' '
+    return "{}]".format(status_line)
+
+def format_bytes(bytesn):
+    negative = abs(bytesn) > bytesn
+    if bytesn is None:
+        return 'N/A'
+    if type(bytesn) is str:
+        bytesn = float(bytesn)
+    bytesn = abs(bytesn)
+    if bytesn == 0.0:
+        exponent = 0
+    else:
+        exponent = int(math.log(bytesn, 1024.0))
+    suffix = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB', 'EiB', 'ZiB', 'YiB'][exponent]
+    converted = float(bytesn) / float(1024 ** exponent)
+    return '%s%.2f%s' % ("-" if negative else "", converted, suffix)
+
+############################
+
+
+bkp_root = config['local_backup_root_folder']
+shift_tz = datetime.timezone(datetime.timedelta(hours=config['tz'].get('hours', 0), minutes=config['tz'].get('minutes', 0)))
+path_reduction = config.get('path_reduction', None)
+path_reduction = None if path_reduction == 0 else path_reduction
+notzformat = '{:%d-%m-%Y %H:%M:%S}'
+
+#####################################################
+# Version Check
+#####################################################
+def connection_available(timeout=3):
+    """
+    Check if Internet Connection is available
+    """
+    try:
+        socket.setdefaulttimeout(timeout)
+        socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect(("8.8.8.8", 53))
+        return True
+    except socket.error:
+        return False
+
+def is_latest_version():
+    if connection_available():
+        try:
+            if LATEST_VER_DATA_URL != "":
+                with urllib.request.urlopen(LATEST_VER_DATA_URL) as url:
+                    vdata = json.loads(url.read().decode())
+        except:
+            return None
+        else:
+            try:
+                latest_cr: str = vdata.get("coderev", "Unavailable")
+                current_cr: str = version.get('coderev', "Unavailable")
+                if latest_cr.isnumeric() and current_cr.isnumeric():
+                    if int(current_cr) == int(latest_cr):
+                        return [True, vdata, False]
+                    elif int(current_cr) > int(latest_cr):
+                        return [True, vdata, True]
+            except:
+                return None
+        return [False, vdata, False]
+    else:
+        return None
+
+def dl_update():
+    github_raw_links = [
+        {
+            "url": LATEST_VER_DATA_URL,
+            "type": "json",
+            "name": "version.json"
+        },
+        {
+            "url": "https://raw.githubusercontent.com/DimasDSF/BackupScript/master/bkpScr/backup.py",
+            "type": "py",
+            "name": "backup.py"
+        }
+    ]
+    try:
+        for filedata in github_raw_links:
+            with urllib.request.urlopen(filedata['url']) as dld_data:
+                if filedata['type'] == "json":
+                    j = json.loads(dld_data.read().decode())
+                    with open(os.path.join(os.path.dirname(os.path.realpath(__file__)), filedata['name']), "w+") as dl:
+                        json.dump(j, dl, indent=4)
+                elif filedata['type'] == "py":
+                    with open(os.path.join(os.path.dirname(os.path.realpath(__file__)), filedata['name']), "w+") as dl:
+                        text = dld_data.read().decode(encoding=locale.getdefaultlocale()[1])
+                        dl.write(text)
+    except Exception as update_exception:
+        print("Update Failed due to an Exception: {0} / {1}".format(type(update_exception).__name__, update_exception.args))
+    else:
+        print("Update Finished.\nRestarting", end="")
+        for t in range(3):
+            print(".", end="")
+            sys.stdout.flush()
+            time.sleep(1)
+        python = sys.executable
+        os.execl(python, python, *sys.argv)
+
+#####################################################
+
+class FileChange(object):
+    def __init__(self, change_type: str, change_text: str):
+        self.change_type = change_type
+        self.change_text = change_text
+
+    def __str__(self):
+        return self.change_text
+
+    def __hash__(self):
+        return hash((self.change_type, self.change_text))
+
+    def __eq__(self, other):
+        if not isinstance(other, type(self)):
+            raise TypeError(f"Cannot compare a {type(self).__name__} with {type(other).__name__}")
+        return other.__hash__() == self.__hash__()
+
+class ChangeTypes(object):
+    CH_TYPE_UPDATE = 'update'
+    CH_TYPE_RENAME = 'rename'
+    CH_TYPE_REMOVE = 'remove'
+    CH_TYPE_CREATE = 'create'
+    CH_TYPE_FOLDER = 'folder'
+    CH_TYPE_REMOVEFOLDER = 'removef'
+
+    @staticmethod
+    def all_types() -> List[str]:
+        return [y for x, y in ChangeTypes.__dict__.items() if x.startswith('CH_TYPE_')]
+
+class ChangeTypeTracker(object):
+    def __init__(self):
+        self.changes = set()
+
+    @property
+    def num_changes(self):
+        return len(self.changes)
+
+    @property
+    def has_changes(self):
+        return self.num_changes > 0
+
+    def add(self, item):
+        self.changes.add(item)
+
+    def remove(self, item):
+        self.changes.remove(item)
+
+    def __contains__(self, item):
+        return item in self.changes
+
+class ChangeTracker(object):
+    def __init__(self):
+        self.typetrackers: Dict[str, ChangeTypeTracker] = dict()
+        for t in ChangeTypes.all_types():
+            self.typetrackers[t] = ChangeTypeTracker()
+        self.log = list()
+        self.errors = list()
+
+    @property
+    def sorted_changes(self):
+        return dict((x, y.changes) for x, y in self.typetrackers.items())
+
+    @property
+    def sorted_changes_count(self):
+        return dict((x, y.num_changes) for x, y in self.typetrackers.items())
+
+    def num_changes(self, c_type: str):
+        if c_type not in ChangeTypes.all_types():
+            raise TypeError(f"Incorrect type {c_type} passed.")
+        return self.typetrackers[c_type].num_changes
+
+    def has_changes(self, c_type: str):
+        if c_type not in ChangeTypes.all_types():
+            raise TypeError(f"Incorrect type {c_type} passed.")
+        return self.typetrackers[c_type].has_changes
+
+    @property
+    def num_errors(self):
+        return len(self.errors)
+
+    def add_log(self, log_text: str, end: str = "\n", should_print=True, wait_time: float = 0):
+        if should_print:
+            print(log_text, end=end)
+            if "\r" in end:
+                sys.stdout.flush()
+        self.log.append("\n{0}:\n{1}".format(notzformat.format(get_cur_dt()), log_text))
+        if wait_time != 0:
+            time.sleep(wait_time)
+
+    def add_error(self, error_text: str, wait_time: float = 0):
+        self.errors.append("\n{}".format(error_text))
+        if not launch_args.args.nooutput:
+            print(error_text)
+            if wait_time != 0:
+                time.sleep(wait_time)
+
+    def add_file_change(self, change_type: str, change_text: str, should_print=True, wait_time: float = 0):
+        try:
+            if change_type not in ChangeTypes.all_types():
+                raise TypeError(f"Change Type {change_type} is not a correct change type.")
+            _change = FileChange(change_type, change_text)
+        except TypeError:
+            self.add_error("Incorrect file change type passed {}.".format(change_type), 2.0)
+        else:
+            if should_print:
+                print(change_text)
+            self.typetrackers[change_type].add(_change)
+            if wait_time != 0:
+                time.sleep(wait_time)
+
+class FileChangeInstruction(object):
+    def __init__(self, change_type: str, sourcefiledir: str, targetfilepath: str = None):
+        if change_type not in ChangeTypes.all_types():
+            raise TypeError(f"Change Type {change_type} is not a correct change type.")
+        self.change_type = change_type
+        self.source = sourcefiledir
+        self.target = targetfilepath
+
+    @property
+    def diffspace(self):
+        return self.sourcesize - self.targetsize
+
+    @property
+    def diffsize(self):
+        return abs(self.diffspace)
+
+    @property
+    def sourcesize(self):
+        if self.source is None:
+            return 0
+        elif not os.path.exists(self.source):
+            return 0
+        return os.stat(self.source).st_size
+
+    @property
+    def targetsize(self):
+        if self.target is None:
+            return 0
+        elif not os.path.exists(self.target):
+            return 0
+        return os.stat(self.target).st_size
+
+    def __hash__(self):
+        return hash((self.change_type, self.source, self.target))
+
+    def __eq__(self, other):
+        if not isinstance(other, type(self)):
+            raise TypeError(f"Cannot compare a {type(self).__name__} with {type(other).__name__}")
+        return other.__hash__() == self.__hash__()
+
+    def __str__(self):
+        return f"[{self.change_type}]:{self.source} -> {self.target}"
+
+class InstructionStorage(object):
+    def __init__(self):
+        self.filechanges: Set[FileChangeInstruction] = set()
+
+    @property
+    def space_requirement(self):
+        return sum(x.diffspace for x in self.filechanges)
+
+    @property
+    def bytes_to_modify(self):
+        return sum(x.diffsize for x in self.filechanges)
+
+    @property
+    def changes_num(self):
+        return len(self.filechanges)
+
+    def add_file_change(self, change_type: str, sourcefiledir: str, targetfiledir: Optional[str] = None):
+        if change_type not in ChangeTypes.all_types():
+            raise TypeError(f"Change Type {change_type} is not a correct change type.")
+        if targetfiledir is None and change_type not in (ChangeTypes.CH_TYPE_REMOVE, ChangeTypes.CH_TYPE_REMOVEFOLDER):
+            raise ValueError("Target File Directory can only be empty if change type is removal.")
+        self.filechanges.add(FileChangeInstruction(change_type=change_type, sourcefiledir=sourcefiledir, targetfilepath=targetfiledir))
+
+    def get_file_change(self):
+        if self.changes_num <= 0:
+            return None
+        return self.filechanges.pop()
+
+    def print_scan_status(self, header: str = "", cur_dir: str = "", cur_num: int = -1, total_num: int = -1, *, cur_file: str = None):
+        ANSIEscape.set_cursor_pos(1, 1)
+        print(f"{header}{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}")
+        print(f"Reading {cur_dir}>>{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}")
+        ANSIEscape.clear_current_line()
+        ANSIEscape.set_cursor_pos(1, 4)
+        if cur_file is None:
+            cur_file = os.path.basename(cur_dir)
+        if cur_dir in cur_file:
+            cur_file = cur_file[len(cur_dir):]
+        print(f">>{cur_file if len(cur_file) > 0 else '~'}{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}")
+        print(f"Changes required: {self.changes_num}{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}")
+        for fct in ChangeTypes.all_types():
+            _specific_change_group_len = len(tuple(x for x in self.filechanges if x.change_type == fct))
+            if _specific_change_group_len > 0:
+                print(f"{fct.title()}: {_specific_change_group_len}{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}")
+        print(f"{cur_num}/{total_num} done. {get_progress_bar(round(cur_num/total_num , 2) * 100)}{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}")
+
+
+change_tracker = ChangeTracker()
+file_instruction_list = InstructionStorage()
+
 def del_file_or_dir(path):
     try:
         if os.path.exists(path):
@@ -407,19 +607,6 @@ def get_src_path(srcpath: str, nodrivepath: str):
         ret = os.path.join(ret, p)
     return ret
 
-
-def get_progress_bar(perc: float):
-    status_slots = 50
-    status_bars = math.floor((perc / 100) * status_slots)
-    status_line = '['
-    for n in range(status_bars):
-        status_line = status_line + '░'
-    if math.floor(status_slots - status_bars) > 0:
-        for n in range(status_slots - status_bars):
-            status_line = status_line + ' '
-    return "{}]".format(status_line)
-
-
 def recursive_fileiter(sdir):
     ret = list()
     folders = list()
@@ -431,7 +618,7 @@ def recursive_fileiter(sdir):
                     folders.append(f.path)
             except FileNotFoundError as _e:
                 if os.path.islink(_e.filename) or Path(_e.filename).is_symlink():
-                    add_error(f"Folder {_e.filename} was found but it apparently is a {'sym' if Path(_e.filename).is_symlink() else ''}link that cannot be reached. {_e.__class__.__name__} {_e.args}")
+                    change_tracker.add_error(f"Folder {_e.filename} was found but it apparently is a {'sym' if Path(_e.filename).is_symlink() else ''}link that cannot be reached. {_e.__class__.__name__} {_e.args}")
         for folder in folders:
             ret.extend(recursive_fileiter(folder))
         if os.path.isfile(sdir):
@@ -443,11 +630,11 @@ def recursive_fileiter(sdir):
                     ret.append(item)
             except FileNotFoundError as _e:
                 if os.path.islink(_e.filename) or Path(_e.filename).is_symlink():
-                    add_error(f"File {_e.filename} | {item.name} was found but it apparently is a {'sym' if Path(_e.filename).is_symlink() else ''}link that cannot be reached. {_e.__class__.__name__} {_e.args}")
+                    change_tracker.add_error(f"File {_e.filename} | {item.name} was found but it apparently is a {'sym' if Path(_e.filename).is_symlink() else ''}link that cannot be reached. {_e.__class__.__name__} {_e.args}")
             except Exception as _e:
-                add_error(f"Scanning File {item.name} raised an exception: {_e.__class__.__name__}: {_e.args}")
+                change_tracker.add_error(f"Scanning File {item.name} raised an exception: {_e.__class__.__name__}: {_e.args}")
     else:
-        add_error(f"Recursive FileIter could not find {sdir}", 2)
+        change_tracker.add_error(f"Recursive FileIter could not find {sdir}", 2)
     return ret
 
 def recursive_folderiter(sdir):
@@ -458,21 +645,6 @@ def recursive_folderiter(sdir):
     for folder in subfolders:
         ret.extend(recursive_folderiter(folder.path))
     return ret
-
-def format_bytes(bytesn):
-    negative = abs(bytesn) > bytesn
-    if bytesn is None:
-        return 'N/A'
-    if type(bytesn) is str:
-        bytesn = float(bytesn)
-    bytesn = abs(bytesn)
-    if bytesn == 0.0:
-        exponent = 0
-    else:
-        exponent = int(math.log(bytesn, 1024.0))
-    suffix = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB', 'EiB', 'ZiB', 'YiB'][exponent]
-    converted = float(bytesn) / float(1024 ** exponent)
-    return '%s%.2f%s' % ("-" if negative else "", converted, suffix)
 
 def get_actual_filepath(p: str):
     try:
@@ -487,23 +659,21 @@ def get_actual_filename(p: str):
 def process():
     clear_terminal()
     print("Initializing.")
-    time.sleep(2)
+    time.sleep(1)
     if not os.path.exists(bkp_root):
         os.mkdir(bkp_root)
-    space_req = 0
-    bytes_to_modify = 0
     allbkps: list = config['backup_dirs']
     if launch_args.args.nooutput:
         print("Checking Files for changes | No Output Mode.")
+    num_bkps = len(allbkps)
+    if not launch_args.args.nooutput:
+        clear_terminal()
+    ANSIEscape.set_cursor_display(False)
     for n, b in enumerate(allbkps):
         sd = os.path.normpath(b['path'])
         try:
-            reprint_temp = [0, 0, 0, ""]
             if not launch_args.args.nooutput:
-                clear_terminal()
-                print("Checking Files for changes:")
-                print("Reading {0}".format(sd))
-                print("{0}/{1}. {2} Required Changes Indexed.".format(n, len(allbkps), len(file_list)), end="\r")
+                file_instruction_list.print_scan_status("Checking Files for changes:", sd, n, num_bkps)
             p = os.path.splitdrive(sd)[1]
             fp = os.path.join(bkp_root, get_bkp_path(p[1:] if p.startswith(("\\", "/")) else p))
             if os.path.exists(sd):
@@ -511,38 +681,21 @@ def process():
                 if os.path.isfile(sd):
                     if os.path.exists(fp):
                         if os.stat(sd).st_mtime > os.stat(fp).st_mtime + 1 or b.get('force_backup', False):
-                            file_list.append(dict(type="update", sfile=sd, dfilepath=fp, diffsize=abs(os.stat(fp).st_size - os.stat(sd).st_size)))
-                            space_req += os.stat(fp).st_size - os.stat(sd).st_size
-                            bytes_to_modify += abs(os.stat(fp).st_size - os.stat(sd).st_size)
+                            file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_UPDATE, sd, fp)
                     else:
-                        file_list.append(dict(type="create", sfile=sd, dfilepath=fp, diffsize=os.stat(sd).st_size))
-                        space_req += os.stat(sd).st_size
-                        bytes_to_modify += os.stat(sd).st_size
+                        file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_CREATE, sd, fp)
                 else:
                     for f in recursive_fileiter(sd):
                         fspldrv = os.path.splitdrive(f.path)[1]
                         fp = os.path.join(bkp_root, get_bkp_path(fspldrv[1:] if fspldrv.startswith(("\\", "/")) else fspldrv))
-                        if not launch_args.args.nooutput:
-                            if reprint_temp[3] != sd:
-                                clear_terminal()
-                                print("Checking Files for changes:")
-                                print("Reading {0}".format(sd))
-                                print("{0}/{1}. {2} Required Changes Indexed.".format(n, len(allbkps), len(file_list)), end='\r', flush=True)
-                                reprint_temp = [n, len(allbkps), len(file_list), sd]
-                            else:
-                                if reprint_temp[0] != n or reprint_temp[1] != len(allbkps) or reprint_temp[2] != len(file_list):
-                                    print("{0}/{1}. {2} Required Changes Indexed.".format(n, len(allbkps), len(file_list)), end='\r', flush=True)
-                                    reprint_temp = [n, len(allbkps), len(file_list), sd]
                         if f.is_file():
+                            if not launch_args.args.nooutput:
+                                file_instruction_list.print_scan_status("Checking Files for changes:", sd, n, num_bkps, cur_file=f.path)
                             if os.path.exists(fp):
                                 if os.stat(f.path).st_mtime > os.stat(fp).st_mtime + 1 or b.get('force_backup', False):
-                                    file_list.append(dict(type="update", sfile=f.path, dfilepath=fp, diffsize=abs(os.stat(f.path).st_size - os.stat(fp).st_size)))
-                                    space_req += os.stat(f.path).st_size - os.stat(fp).st_size
-                                    bytes_to_modify += abs(os.stat(f.path).st_size - os.stat(fp).st_size)
+                                    file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_UPDATE, f.path, fp)
                             else:
-                                file_list.append(dict(type="create", sfile=f.path, dfilepath=fp, diffsize=os.stat(f.path).st_size))
-                                space_req += os.stat(f.path).st_size
-                                bytes_to_modify += os.stat(f.path).st_size
+                                file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_CREATE, f.path, fp)
                     if b.get('snapshot_mode', False):
                         rnodrivetd = os.path.splitdrive(sd)[1]
                         if os.path.exists(os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd))):
@@ -550,120 +703,117 @@ def process():
                                 rsflunod = os.path.splitdrive(f.path)[1]
                                 sf = get_src_path(sd, rsflunod)
                                 if not launch_args.args.nooutput:
-                                    if reprint_temp[3] != os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd)):
-                                        clear_terminal()
-                                        print("Checking Files for changes:")
-                                        print("Reading {0}".format(os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd))))
-                                        print("{0}/{1}. {2} Required Changes Indexed.".format(n, len(allbkps), len(file_list)), end="\r")
-                                        reprint_temp = [n, len(allbkps), len(file_list), os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd))]
-                                    else:
-                                        if reprint_temp[0] != n or reprint_temp[1] != len(allbkps) or reprint_temp[2] != len(file_list):
-                                            print("{0}/{1}. {2} Required Changes Indexed.".format(n, len(allbkps), len(file_list)), end="\r")
-                                            reprint_temp = [n, len(allbkps), len(file_list), os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd))]
+                                    file_instruction_list.print_scan_status("Checking Files for changes:", os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd)), n, num_bkps, cur_file=f.path)
                                 if not os.path.exists(sf):
-                                    file_list.append(dict(type="remove" if os.path.isfile(f.path) else "removef", sfile=f.path, dfilepath=f.path, diffsize=os.stat(f.path).st_size))
-                                    space_req += -os.stat(f.path).st_size
-                                    bytes_to_modify += os.stat(f.path).st_size
+                                    file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_REMOVE if os.path.isfile(f.path) else ChangeTypes.CH_TYPE_REMOVEFOLDER, f.path)
                             for f in recursive_folderiter(os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd))):
                                 rsflunod = os.path.splitdrive(f.path)[1]
                                 sf = get_src_path(sd, rsflunod)
                                 if not os.path.exists(sf):
-                                    file_list.append(dict(type="remove" if os.path.isfile(f.path) else "removef", sfile=f.path, dfilepath=f.path, diffsize=os.stat(f.path).st_size))
-                                    space_req += -os.stat(f.path).st_size
-                                    bytes_to_modify += os.stat(f.path).st_size
+                                    file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_REMOVE if os.path.isfile(f.path) else ChangeTypes.CH_TYPE_REMOVEFOLDER, f.path)
             else:
                 if b.get('snapshot_mode', False):
                     if os.path.exists(fp):
-                        file_list.append(dict(type="remove" if os.path.isfile(fp) else "removef", sfile=fp, dfilepath=fp, diffsize=os.stat(fp).st_size))
-                        space_req += -os.stat(fp).st_size
-                        bytes_to_modify += os.stat(fp).st_size
+                        file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_REMOVE if os.path.isfile(fp) else ChangeTypes.CH_TYPE_REMOVEFOLDER, fp)
                 else:
-                    add_error("{} Backup Source is Unavailable.".format(sd), wait_time=1)
+                    change_tracker.add_error("{} Backup Source is Unavailable.".format(sd), wait_time=1)
         except Exception as _e:
-            add_error(f"Scanning File {sd} raised an exception: {_e.__traceback__.tb_lineno} | {_e.__class__.__name__}: {_e.args}")
-    if len(file_list) > 0:
+            change_tracker.add_error(f"Scanning File {sd} raised an exception: {_e.__traceback__.tb_lineno} | {_e.__class__.__name__}: {_e.args}")
+    ANSIEscape.set_cursor_display(True)
+    if file_instruction_list.changes_num > 0:
         clear_terminal()
-        print("{0} Changes Required. {1} Updates, {2} Creations, {3} Removals. {4} I/OAction Size".format(len(file_list),
-                                                                                       len(list(filter(lambda x: x['type'] == "update", file_list))),
-                                                                                       len(list(filter(lambda x: x['type'] == "create", file_list))),
-                                                                                       len(list(filter(lambda x: x['type'] == "remove", file_list))) + len(list(filter(lambda x: x['type'] == "removef", file_list))),
-                                                                                       format_bytes(bytes_to_modify)))
+        print("{0} Changes Required. {1} Updates, {2} Creations, {3} Removals. {4} I/OAction Size".format(file_instruction_list.changes_num,
+                                                                                       len(list(filter(lambda x: x.change_type == ChangeTypes.CH_TYPE_UPDATE, file_instruction_list.filechanges))),
+                                                                                       len(list(filter(lambda x: x.change_type == ChangeTypes.CH_TYPE_CREATE, file_instruction_list.filechanges))),
+                                                                                       len(list(filter(lambda x: x.change_type == ChangeTypes.CH_TYPE_REMOVE, file_instruction_list.filechanges))) + len(list(filter(lambda x: x.change_type == ChangeTypes.CH_TYPE_REMOVEFOLDER, file_instruction_list.filechanges))),
+                                                                                       format_bytes(file_instruction_list.bytes_to_modify)))
         dinfo = shutil.disk_usage(os.path.realpath('/' if os.name == 'nt' else __file__))
-        print("This will {3} approximately {0} of space. {1} Available from {2}".format(format_bytes(abs(space_req)), format_bytes(dinfo.free), format_bytes(dinfo.total), "require" if space_req >= 0 else "free up"))
+        print("This will {3} approximately {0} of space. {1} Available from {2}".format(format_bytes(abs(file_instruction_list.space_requirement)), format_bytes(dinfo.free), format_bytes(dinfo.total), "require" if file_instruction_list.space_requirement >= 0 else "free up"))
         if not launch_args.args.nopause:
             os.system("pause")
-        if space_req > dinfo.free:
+        ANSIEscape.set_cursor_display(False)
+        if file_instruction_list.space_requirement > dinfo.free:
             print("Not Enough Space to finish the backup process. Exiting.")
             raise IOError("Not Enough Space")
         file_change_errors = 0
         bytes_done = 0
+        bytes_to_modify = file_instruction_list.bytes_to_modify
+
+        def print_status():
+            ANSIEscape.set_cursor_pos(1, 1)
+            print(f"In Progress | Ctrl+C to cancel.{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}")
+            print(f"Folder: {os.path.split(_cur_file.source)[0]}{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}")
+            ANSIEscape.clear_current_line()
+            ANSIEscape.set_cursor_pos(1, 4)
+            print(f"File: {os.path.split(_cur_file.source)[1]}{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}")
+            print(
+                f"{current_file_num} / {num_files} done. DiffSize: {format_bytes(_cur_file.diffsize)}{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}")
+            print(
+                f"{get_progress_bar(round(current_file_num * 100 / num_files, 2))}{round(current_file_num * 100 / num_files, 2)}%")
+            print(
+                f"{get_progress_bar(round(((abs(bytes_done) / bytes_to_modify) if bytes_to_modify != 0 else 1) * 100, 2))}{format_bytes(bytes_done)}/{format_bytes(bytes_to_modify)}{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}")
+            print("\n\n{} errors".format(file_change_errors) if file_change_errors != 0 else "")
         if launch_args.args.nooutput:
             print("In Progress | No Output Mode.")
-        for num, file in enumerate(file_list):
-            if not os.path.exists(os.path.dirname(file['dfilepath'])):
+        num_files = file_instruction_list.changes_num
+        current_file_num = 0
+        while file_instruction_list.changes_num > 0:
+            _cur_file = file_instruction_list.get_file_change()
+            current_file_num += 1
+            if not os.path.exists(os.path.dirname(_cur_file.target)):
                 try:
-                    os.makedirs(os.path.dirname(file['dfilepath']))
+                    os.makedirs(os.path.dirname(_cur_file.target))
                 except FileExistsError:
                     pass
                 else:
-                    add_file_change('folder', "Created folder {0}".format(os.path.dirname(file['dfilepath'])), should_print=False)
+                    change_tracker.add_file_change('folder', "Created folder {0}".format(os.path.dirname(_cur_file.target)), should_print=False)
             try:
                 if not launch_args.args.nooutput:
-                    clear_terminal()
-                    print("In Progress | Ctrl+C to cancel.")
-                    print("Folder:{4}\nFile:{5}\n{0} / {1} done. DiffSize:{9}\n{6}{2}%\n{7}{8}{3}".format(num,
-                                                                                                len(file_list),
-                                                                                                round(num * 100 / len(file_list), 2),
-                                                                                                "\n\n{} errors".format(file_change_errors) if file_change_errors != 0 else "",
-                                                                                                os.path.split(file['sfile'])[0],
-                                                                                                os.path.split(file['sfile'])[1],
-                                                                                                get_progress_bar(round(num * 100 / len(file_list), 2)),
-                                                                                                get_progress_bar(round(((abs(bytes_done) / bytes_to_modify) if bytes_to_modify != 0 else 1) * 100, 2)),
-                                                                                                "{0}/{1}".format(format_bytes(bytes_done), format_bytes(bytes_to_modify)),
-                                                                                                format_bytes(file['diffsize'])))
+                    print_status()
                 if not launch_args.args.nologs:
-                    add_log("Folder:{2}\nFile:{3}\n{0} / {1} done. DiffSize:{4}".format(num,
-                                                                                        len(file_list),
-                                                                                        os.path.split(file['sfile'])[0],
-                                                                                        os.path.split(file['sfile'])[1],
-                                                                                        format_bytes(file['diffsize'])), should_print=False)
-                if file['type'] == "update":
-                    bytes_done += file['diffsize']
-                    act_filepath = get_actual_filepath(file['dfilepath'])
-                    shutil.copy2(file['sfile'], os.path.dirname(act_filepath))
-                    add_file_change('update', "Updated | {0} | {1} -> {2}".format(file['sfile'],
-                                                                                  get_modification_dt_from_file(file['sfile']),
-                                                                                  get_modification_dt_from_file(file['dfilepath'])), should_print=False)
-                    if os.path.basename(act_filepath) != os.path.basename(file['sfile']):
-                        os.rename(act_filepath, os.path.join(os.path.dirname(act_filepath), os.path.basename(file['sfile'])))
-                        add_file_change('rename', "Renamed | {0} | {1} -> {2}".format(act_filepath,
-                                                                                      os.path.basename(act_filepath), os.path.basename(file["sfile"])))
-                elif file['type'] == "create":
-                    bytes_done += file['diffsize']
-                    shutil.copy2(file['sfile'], os.path.dirname(file['dfilepath']))
-                    add_file_change('create', "Created | {0}".format(file['sfile']), should_print=False)
-                elif file['type'] == "remove" or file['type'] == "removef":
-                    bytes_done += file['diffsize']
-                    del_file_or_dir(get_actual_filepath(file['sfile']))
-                    add_file_change(file['type'], "Removed | {0}".format(get_actual_filepath(file['sfile'])), should_print=False)
+                    change_tracker.add_log("Folder:{2}\nFile:{3}\n{0} / {1} done. DiffSize:{4}".format(current_file_num,
+                                                                                        num_files,
+                                                                                        os.path.split(_cur_file.source)[0],
+                                                                                        os.path.split(_cur_file.source)[1],
+                                                                                        format_bytes(_cur_file.diffsize)), should_print=False)
+                if _cur_file.change_type == ChangeTypes.CH_TYPE_UPDATE:
+                    bytes_done += _cur_file.diffsize
+                    act_filepath = get_actual_filepath(_cur_file.target)
+                    shutil.copy2(_cur_file.source, os.path.dirname(act_filepath))
+                    change_tracker.add_file_change(ChangeTypes.CH_TYPE_UPDATE, "Updated | {0} | {1} -> {2}".format(_cur_file.source,
+                                                                                                 get_modification_dt_from_file(_cur_file.source),
+                                                                                                 get_modification_dt_from_file(_cur_file.target)),
+                                                   should_print=False)
+                    if os.path.basename(act_filepath) != os.path.basename(_cur_file.source):
+                        os.rename(act_filepath, os.path.join(os.path.dirname(act_filepath), os.path.basename(_cur_file.source)))
+                        change_tracker.add_file_change('rename', "Renamed | {0} | {1} -> {2}".format(act_filepath,
+                                                                                                     os.path.basename(act_filepath),
+                                                                                                     os.path.basename(_cur_file.source)))
+                elif _cur_file.change_type == ChangeTypes.CH_TYPE_CREATE:
+                    bytes_done += _cur_file.diffsize
+                    shutil.copy2(_cur_file.source, os.path.dirname(_cur_file.target))
+                    change_tracker.add_file_change(ChangeTypes.CH_TYPE_CREATE, "Created | {0}".format(_cur_file.source), should_print=False)
+                elif _cur_file.change_type == ChangeTypes.CH_TYPE_REMOVE or _cur_file.change_type == ChangeTypes.CH_TYPE_REMOVEFOLDER:
+                    bytes_done += _cur_file.diffsize
+                    del_file_or_dir(get_actual_filepath(_cur_file.source))
+                    change_tracker.add_file_change(_cur_file.change_type, "Removed | {0}".format(get_actual_filepath(_cur_file.source)), should_print=False)
             except Exception as fileupd_exception:
-                add_error("Failed to update file: {0} due to an Exception {1}. {2}".format(file, type(fileupd_exception).__name__, fileupd_exception.args), wait_time=5)
+                change_tracker.add_error("Failed to update file: {0} due to an Exception {1}. {2}".format(str(_cur_file), type(fileupd_exception).__name__, fileupd_exception.args), wait_time=5)
                 file_change_errors += 1
         clear_terminal()
         print("Finished Copying.")
-        print("{0} / {1} done.\n{4}{2}%\n{5}{6}{3}".format(len(file_list) - file_change_errors,
-                                                             len(file_list),
-                                                             round((len(file_list) - file_change_errors) * 100 / len(file_list), 2),
-                                                             "\n\n{} errors".format(file_change_errors) if file_change_errors != 0 else "",
-                                                             get_progress_bar(round((len(file_list) - file_change_errors) * 100 / len(file_list), 2)),
-                                                             get_progress_bar(round(((abs(bytes_done) / bytes_to_modify) if bytes_to_modify != 0 else 1) * 100, 2)),
-                                                             "{0}/{1}".format(format_bytes(bytes_done), format_bytes(bytes_to_modify))))
-        add_log("{0} / {1} done.\n{2}%\n{3}".format(len(file_list) - file_change_errors,
-                                                             len(file_list),
-                                                             round((len(file_list) - file_change_errors) * 100 / len(file_list), 2),
+        ANSIEscape.set_cursor_display(True)
+        print("{0} / {1}({2}%) done.\n{3}{4}".format(num_files - file_change_errors,
+                                                     num_files,
+                                                     round((num_files - file_change_errors) * 100 / num_files, 2),
+                                                     "\n\n{} errors".format(file_change_errors) if file_change_errors != 0 else "",
+                                                     "\n".join([x[1:] if x.startswith("\n") else x for x in change_tracker.errors])))
+        change_tracker.add_log("{0} / {1} done.\n{2}%\n{3}".format(num_files - file_change_errors,
+                                                             num_files,
+                                                             round((num_files - file_change_errors) * 100 / num_files, 2),
                                                              "\n\n{} errors".format(file_change_errors) if file_change_errors != 0 else ""), should_print=False)
     else:
-        print("{0}/{0}. {1} Required Changes Indexed.".format(len(allbkps), len(file_list)))
+        print("{0}/{0}. 0 Required Changes Indexed.".format(len(allbkps)))
         print("No Changes Found")
         time.sleep(2)
 
@@ -708,9 +858,13 @@ def start_menu():
                     else:
                         time.sleep(5)
                     dl_update()
+    else:
+        _buildstamp = version.get("buildstamp", 0)
+        if time.time() - _buildstamp > 5184000:  # 60 days
+            print(f"Running in OFFLINE Mode\nBuild time: {datetime.datetime.fromtimestamp(_buildstamp, tz=shift_tz)} ({datetime.timedelta(seconds=(time.time() - _buildstamp)).days} days old).\nMay be outdated.")
     if not args.nopause:
         os.system("pause >nul")
-    add_log("Starting backup process")
+    change_tracker.add_log("Starting backup process")
     time.sleep(2)
     start_dt = datetime.datetime.now(shift_tz)
     finished_init = True
@@ -723,48 +877,52 @@ def start_menu():
     except KeyboardInterrupt:
         print("Manually Cancelled.")
         time.sleep(2)
-    add_log("Finished after {3} with {0} errors, {1} File Changes, {2} Folder Changes.{4}".format(len(errors_list),
-                                                                                                    len(file_changes['update']) + len(file_changes['create']) + len(file_changes['remove']),
-                                                                                                    len(file_changes['folder']) + len(file_changes['removef']),
+    change_tracker.add_log("Finished after {3} with {0} errors, {1} File Changes, {2} Folder Changes.{4}".format(change_tracker.num_errors,
+                                                                                                    change_tracker.num_changes(ChangeTypes.CH_TYPE_UPDATE) +
+                                                                                                    change_tracker.num_changes(ChangeTypes.CH_TYPE_CREATE) +
+                                                                                                    change_tracker.num_changes(ChangeTypes.CH_TYPE_REMOVE),
+                                                                                                    change_tracker.num_changes(ChangeTypes.CH_TYPE_FOLDER) +
+                                                                                                    change_tracker.num_changes(ChangeTypes.CH_TYPE_REMOVEFOLDER),
                                                                                                     str(datetime.datetime.now(shift_tz) - start_dt),
-                                                                                                    "\n{0} file{1} renamed due to filename case changes".format(len(file_changes['rename']), "s" if len(file_changes['rename']) != 1 else "") if len(file_changes['rename']) > 0 else ""))
-    if not args.nologs and (len(file_changes['update']) + len(file_changes['rename']) + len(file_changes['create']) + len(file_changes['remove']) + len(file_changes['removef']) + len(file_changes['folder']) + len(errors_list)) > 0:
-        add_log("Writing Logs")
+                                                                                                    "\n{0} file{1} renamed due to filename case changes".format(change_tracker.num_changes(ChangeTypes.CH_TYPE_RENAME),
+                                                                                                                                                                "s" if change_tracker.num_changes(ChangeTypes.CH_TYPE_RENAME) != 1 else "") if change_tracker.has_changes(ChangeTypes.CH_TYPE_RENAME) else ""))
+    if not args.nologs and (sum(x.num_changes for x in change_tracker.typetrackers.values()) + change_tracker.num_errors) > 0:
+        change_tracker.add_log("Writing Logs")
         if not os.path.exists("bkpLogs"):
             os.mkdir("bkpLogs")
         ulp = os.path.join("bkpLogs", str(start_dt.date()))
         if not os.path.exists(ulp):
             os.mkdir(ulp)
-        if len(log) > 0:
+        if len(change_tracker.log) > 0:
             with open(os.path.join(ulp, "full.log"), "a", encoding="utf-8") as ul:
-                ul.writelines(log)
-        if len(file_changes['update']) > 0:
+                ul.writelines(change_tracker.log)
+        if change_tracker.has_changes(ChangeTypes.CH_TYPE_UPDATE):
             with open(os.path.join(ulp, "updates.log"), "a", encoding="utf-8") as ul:
-                ul.writelines(file_changes['update'])
-        if len(file_changes['rename']) > 0:
+                ul.writelines(f"{str(x)}\n" for x in change_tracker.typetrackers[ChangeTypes.CH_TYPE_UPDATE].changes)
+        if change_tracker.has_changes(ChangeTypes.CH_TYPE_RENAME):
             with open(os.path.join(ulp, "renames.log"), "a", encoding="utf-8") as ul:
-                ul.writelines(file_changes['rename'])
-        if len(file_changes['create']) > 0:
+                ul.writelines(f"{str(x)}\n" for x in change_tracker.typetrackers[ChangeTypes.CH_TYPE_RENAME].changes)
+        if change_tracker.has_changes(ChangeTypes.CH_TYPE_CREATE):
             with open(os.path.join(ulp, "additions.log"), "a", encoding="utf-8") as ul:
-                ul.writelines(file_changes['create'])
-        if len(file_changes['remove']) > 0:
+                ul.writelines(f"{str(x)}\n" for x in change_tracker.typetrackers[ChangeTypes.CH_TYPE_CREATE].changes)
+        if change_tracker.has_changes(ChangeTypes.CH_TYPE_REMOVE):
             with open(os.path.join(ulp, "removals.log"), "a", encoding="utf-8") as ul:
-                ul.writelines(file_changes['remove'])
-        if len(file_changes['removef']) > 0:
+                ul.writelines(f"{str(x)}\n" for x in change_tracker.typetrackers[ChangeTypes.CH_TYPE_REMOVE].changes)
+        if change_tracker.has_changes(ChangeTypes.CH_TYPE_REMOVEFOLDER):
             with open(os.path.join(ulp, "folderremovals.log"), "a", encoding="utf-8") as ul:
-                ul.writelines(file_changes['removef'])
-        if len(file_changes['folder']) > 0:
+                ul.writelines(f"{str(x)}\n" for x in change_tracker.typetrackers[ChangeTypes.CH_TYPE_REMOVEFOLDER].changes)
+        if change_tracker.has_changes(ChangeTypes.CH_TYPE_FOLDER):
             with open(os.path.join(ulp, "folders.log"), "a", encoding="utf-8") as ul:
-                ul.writelines(file_changes['folder'])
-        if len(errors_list) > 0:
+                ul.writelines(f"{str(x)}\n" for x in change_tracker.typetrackers[ChangeTypes.CH_TYPE_FOLDER].changes)
+        if change_tracker.num_errors > 0:
             with open(os.path.join(ulp, "errors.log"), "a", encoding="utf-8") as ul:
-                ul.writelines(errors_list)
+                ul.writelines(change_tracker.errors)
     print("Done.")
-    if len(errors_list) > 0:
-        print(f"Encountered {len(errors_list)} errors.")
+    if change_tracker.num_errors > 0:
+        print(f"Encountered {change_tracker.num_errors} errors.")
         time.sleep(2)
         if args.nologs:
-            print("\n".join(errors_list))
+            print("\n".join(change_tracker.errors))
         else:
             ulp = os.path.join("bkpLogs", str(start_dt.date()))
             os.system("start " + os.path.join(ulp, 'errors.log').replace('\\', '/'))
