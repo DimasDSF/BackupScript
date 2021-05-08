@@ -745,13 +745,10 @@ def process():
             print(f"Folder: {os.path.split(_cur_file.source)[0]}{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}")
             ANSIEscape.clear_current_line()
             ANSIEscape.set_cursor_pos(1, 4)
-            print(f"File: {os.path.split(_cur_file.source)[1]}{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}")
-            print(
-                f"{current_file_num} / {num_files} done. DiffSize: {format_bytes(_cur_file.diffsize)}{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}")
-            print(
-                f"{get_progress_bar(round(current_file_num * 100 / num_files, 2))}{round(current_file_num * 100 / num_files, 2)}%")
-            print(
-                f"{get_progress_bar(round(((abs(bytes_done) / bytes_to_modify) if bytes_to_modify != 0 else 1) * 100, 2))}{format_bytes(bytes_done)}/{format_bytes(bytes_to_modify)}{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}")
+            print(f"File: [{_cur_file.change_type.capitalize()}] {os.path.split(_cur_file.source)[1]}{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}")
+            print(f"{current_file_num} / {num_files} done. DiffSize: {format_bytes(_cur_file.diffsize)}{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}")
+            print(f"{get_progress_bar(round(current_file_num * 100 / num_files, 2))}{round(current_file_num * 100 / num_files, 2)}%")
+            print(f"{get_progress_bar(round(((abs(bytes_done) / bytes_to_modify) if bytes_to_modify != 0 else 1) * 100, 2))}{format_bytes(bytes_done)}/{format_bytes(bytes_to_modify)}{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}")
             print("\n\n{} errors".format(file_change_errors) if file_change_errors != 0 else "")
         if launch_args.args.nooutput:
             print("In Progress | No Output Mode.")
@@ -760,13 +757,14 @@ def process():
         while file_instruction_list.changes_num > 0:
             _cur_file = file_instruction_list.get_file_change()
             current_file_num += 1
-            if not os.path.exists(os.path.dirname(_cur_file.target)):
-                try:
-                    os.makedirs(os.path.dirname(_cur_file.target))
-                except FileExistsError:
-                    pass
-                else:
-                    change_tracker.add_file_change('folder', "Created folder {0}".format(os.path.dirname(_cur_file.target)), should_print=False)
+            if _cur_file.target is not None:
+                if not os.path.exists(os.path.dirname(_cur_file.target)):
+                    try:
+                        os.makedirs(os.path.dirname(_cur_file.target))
+                    except FileExistsError:
+                        pass
+                    else:
+                        change_tracker.add_file_change('folder', "Created folder {0}".format(os.path.dirname(_cur_file.target)), should_print=False)
             try:
                 if not launch_args.args.nooutput:
                     print_status()
@@ -798,7 +796,7 @@ def process():
                     del_file_or_dir(get_actual_filepath(_cur_file.source))
                     change_tracker.add_file_change(_cur_file.change_type, "Removed | {0}".format(get_actual_filepath(_cur_file.source)), should_print=False)
             except Exception as fileupd_exception:
-                change_tracker.add_error("Failed to update file: {0} due to an Exception {1}. {2}".format(str(_cur_file), type(fileupd_exception).__name__, fileupd_exception.args), wait_time=5)
+                change_tracker.add_error("Failed to {3} file: {0} due to an Exception {1}. {2}".format(str(_cur_file), type(fileupd_exception).__name__, fileupd_exception.args, _cur_file.change_type), wait_time=5)
                 file_change_errors += 1
         clear_terminal()
         print("Finished Copying.")
@@ -871,7 +869,7 @@ def start_menu():
     try:
         process()
     except IOError as ioexc:
-        print("{0}: {1}".format(type(ioexc).__name__, ",".join(list(map(lambda x: str(x), ioexc.args)))))
+        print("{0}: {1}".format(type(ioexc).__name__, ",".join(list(map(lambda x: str(x), ioexc.args)))), flush=True)
         os.system("pause")
         sys.exit()
     except KeyboardInterrupt:
@@ -942,6 +940,9 @@ if __name__ == "__main__":
             os.system('pause >nul')
             dl_update()
         else:
+            import traceback
             print("Exception Occured: {0} : {1}".format(type(e).__name__, e.args))
+            print("\n".join(traceback.format_tb(e.__traceback__)))
             os.system("pause")
             raise e
+
