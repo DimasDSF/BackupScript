@@ -531,6 +531,8 @@ class InstructionStorage(object):
         if cur_dir in cur_file:
             cur_file = cur_file[len(cur_dir):]
         print(f">>{cur_file if len(cur_file) > 0 else '~'}{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}")
+        ANSIEscape.clear_current_line()
+        ANSIEscape.set_cursor_pos(1, 6)
         print(f"Changes required: {self.changes_num}{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}")
         for fct in ChangeTypes.all_types():
             _specific_change_group_len = len(tuple(x for x in self.filechanges if x.change_type == fct))
@@ -746,6 +748,8 @@ def process():
             ANSIEscape.clear_current_line()
             ANSIEscape.set_cursor_pos(1, 4)
             print(f"File: [{_cur_file.change_type.capitalize()}] {os.path.split(_cur_file.source)[1]}{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}")
+            ANSIEscape.clear_current_line()
+            ANSIEscape.set_cursor_pos(1, 6)
             print(f"{current_file_num} / {num_files} done. DiffSize: {format_bytes(_cur_file.diffsize)}{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}")
             print(f"{get_progress_bar(round(current_file_num * 100 / num_files, 2))}{round(current_file_num * 100 / num_files, 2)}%")
             print(f"{get_progress_bar(round(((abs(bytes_done) / bytes_to_modify) if bytes_to_modify != 0 else 1) * 100, 2))}{format_bytes(bytes_done)}/{format_bytes(bytes_to_modify)}{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}")
