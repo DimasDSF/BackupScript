@@ -495,14 +495,28 @@ class FileChangeInstruction(object):
 class InstructionStorage(object):
     def __init__(self):
         self.filechanges: Set[FileChangeInstruction] = set()
+        self.cache = {
+            "space_req": [0, False],
+            "bytes_to_mod": [0, False]
+        }
 
     @property
     def space_requirement(self):
-        return sum(x.diffspace for x in self.filechanges)
+        _cache = self.cache['space_req']
+        if _cache[1]:
+            return _cache[0]
+        _sum = sum(x.diffspace for x in self.filechanges)
+        _cache = [_sum, True]
+        return _sum
 
     @property
     def bytes_to_modify(self):
-        return sum(x.diffsize for x in self.filechanges)
+        _cache = self.cache['bytes_to_mod']
+        if _cache[1]:
+            return _cache[0]
+        _sum = sum(x.diffsize for x in self.filechanges)
+        _cache = [_sum, True]
+        return _sum
 
     @property
     def changes_num(self):
@@ -514,6 +528,14 @@ class InstructionStorage(object):
         if targetfiledir is None and change_type not in (ChangeTypes.CH_TYPE_REMOVE, ChangeTypes.CH_TYPE_REMOVEFOLDER):
             raise ValueError("Target File Directory can only be empty if change type is removal.")
         self.filechanges.add(FileChangeInstruction(change_type=change_type, sourcefiledir=sourcefiledir, targetfilepath=targetfiledir))
+        self.invalidate_cache()
+
+    def invalidate_cache(self, key: str = None):
+        if key is not None and key in self.cache:
+            self.cache[key][1] = False
+        else:
+            for k in self.cache.keys():
+                self.cache[k][1] = False
 
     def get_file_change(self):
         if self.changes_num <= 0:
@@ -723,12 +745,13 @@ def process():
             change_tracker.add_error(f"Scanning File {sd} raised an exception: {_e.__traceback__.tb_lineno} | {_e.__class__.__name__}: {_e.args}")
     ANSIEscape.set_cursor_display(True)
     if file_instruction_list.changes_num > 0:
-        clear_terminal()
-        print("{0} Changes Required. {1} Updates, {2} Creations, {3} Removals. {4} I/OAction Size".format(file_instruction_list.changes_num,
+        _changetext = "{0} Changes Required. {1} Updates, {2} Creations, {3} Removals. {4} I/OAction Size".format(file_instruction_list.changes_num,
                                                                                        len(list(filter(lambda x: x.change_type == ChangeTypes.CH_TYPE_UPDATE, file_instruction_list.filechanges))),
                                                                                        len(list(filter(lambda x: x.change_type == ChangeTypes.CH_TYPE_CREATE, file_instruction_list.filechanges))),
                                                                                        len(list(filter(lambda x: x.change_type == ChangeTypes.CH_TYPE_REMOVE, file_instruction_list.filechanges))) + len(list(filter(lambda x: x.change_type == ChangeTypes.CH_TYPE_REMOVEFOLDER, file_instruction_list.filechanges))),
-                                                                                       format_bytes(file_instruction_list.bytes_to_modify)))
+                                                                                       format_bytes(file_instruction_list.bytes_to_modify))
+        clear_terminal()
+        print(_changetext)
         dinfo = shutil.disk_usage(os.path.realpath('/' if os.name == 'nt' else __file__))
         print("This will {3} approximately {0} of space. {1} Available from {2}".format(format_bytes(abs(file_instruction_list.space_requirement)), format_bytes(dinfo.free), format_bytes(dinfo.total), "require" if file_instruction_list.space_requirement >= 0 else "free up"))
         if not launch_args.args.nopause:
@@ -754,6 +777,7 @@ def process():
             print(f"{get_progress_bar(round(current_file_num * 100 / num_files, 2))}{round(current_file_num * 100 / num_files, 2)}%")
             print(f"{get_progress_bar(round(((abs(bytes_done) / bytes_to_modify) if bytes_to_modify != 0 else 1) * 100, 2))}{format_bytes(bytes_done)}/{format_bytes(bytes_to_modify)}{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}")
             print("\n\n{} errors".format(file_change_errors) if file_change_errors != 0 else "")
+
         if launch_args.args.nooutput:
             print("In Progress | No Output Mode.")
         num_files = file_instruction_list.changes_num
@@ -802,6 +826,7 @@ def process():
             except Exception as fileupd_exception:
                 change_tracker.add_error("Failed to {3} file: {0} due to an Exception {1}. {2}".format(str(_cur_file), type(fileupd_exception).__name__, fileupd_exception.args, _cur_file.change_type), wait_time=5)
                 file_change_errors += 1
+        file_instruction_list.invalidate_cache()
         clear_terminal()
         print("Finished Copying.")
         ANSIEscape.set_cursor_display(True)
@@ -949,4 +974,3 @@ if __name__ == "__main__":
             print("\n".join(traceback.format_tb(e.__traceback__)))
             os.system("pause")
             raise e
-
