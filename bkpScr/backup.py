@@ -37,7 +37,7 @@ try:
                 print('Restart to generate new config')
                 time.sleep(3)
                 sys.exit()
-        with open(os.path.join(os.path.dirname(os.path.realpath(__file__)), "config.json"), "r") as data:
+        with open(os.path.join(os.path.dirname(os.path.realpath(__file__)), "config.json"), "r", encoding='utf-8') as data:
             config = json.load(data)
             if config.get("config_version") < HARD_CONFIG_VER:
                 print("Config Format Update Required.")
@@ -62,7 +62,8 @@ try:
                 {
                     "path": "SourcePath_Here",
                     "force_backup": False,
-                    "snapshot_mode": False
+                    "snapshot_mode": False,
+                    "ignored_paths": []
                 }
             ],
             "path_reduction": 0,
@@ -72,7 +73,7 @@ try:
                 "minutes": 0
             }
         }
-        with open(os.path.join(os.path.dirname(os.path.realpath(__file__)), "config.json"), "w+") as data:
+        with open(os.path.join(os.path.dirname(os.path.realpath(__file__)), "config.json"), "w+", encoding='utf-8') as data:
             json.dump(config, data, indent=4)
         print("Setup Config and Restart.")
         time.sleep(5)
@@ -100,12 +101,72 @@ def get_cur_dt():
 ############################
 #        CLI Utils         #
 ############################
+def terminal_size():
+    _ts = os.get_terminal_size()
+    return dict(height=_ts.lines, width=_ts.columns)
+
+def count_lines(msg: str, limit: Optional[int] = None):
+    cur_line_chars = 0
+    lines = 0
+    if limit is None:
+        limit = terminal_size()['width']
+    for char in msg:
+        cur_line_chars += 1
+        while cur_line_chars >= limit:
+            cur_line_chars -= limit
+            lines += 1
+        if char == "\n":
+            lines += 1
+            cur_line_chars = 0
+    if cur_line_chars > 0:
+        lines += 1
+    return lines
 
 class ANSIEscape(object):
     ESC = "\x1b"
     CSI = "\x1b["
     OSC = "\x1b]"
     CONTROLSYMBOL_clear_after_cursor = "\x1b[0K"
+
+    class ForegroundTextColor(object):
+        black = 30
+        red = 31
+        green = 32
+        yellow = 33
+        blue = 34
+        magenta = 35
+        cyan = 36
+        white = 37
+        extended = 38
+        default = 39
+        bright_black = 90
+        bright_red = 91
+        bright_green = 92
+        bright_yellow = 93
+        bright_blue = 94
+        bright_magenta = 95
+        bright_cyan = 96
+        bright_white = 97
+
+    class BackgroundTextColor(object):
+        black = 40
+        red = 41
+        green = 42
+        yellow = 43
+        blue = 44
+        magenta = 45
+        cyan = 46
+        white = 47
+        extended = 48
+        default = 49
+        bright_black = 100
+        bright_red = 101
+        bright_green = 102
+        bright_yellow = 103
+        bright_blue = 104
+        bright_magenta = 105
+        bright_cyan = 106
+        bright_white = 107
 
     @staticmethod
     def enable_ansi_escape():
@@ -116,8 +177,8 @@ class ANSIEscape(object):
                 kernel32 = ctypes.windll.kernel32
                 outhandle = kernel32.GetStdHandle(-11)
                 kernel32.SetConsoleMode(outhandle, 7)
-            except WindowsError as exc:
-                if exc.winerror == 0x0057:  # ERROR_INVALID_PARAMETER
+            except WindowsError as e:
+                if e.winerror == 0x0057:  # ERROR_INVALID_PARAMETER
                     raise NotImplementedError
                 raise
         elif os.name == 'posix':
@@ -207,9 +268,14 @@ class ANSIEscape(object):
         sys.__stdout__.flush()
 
     @staticmethod
+    def insert_lines(num: int = 1):
+        sys.__stdout__.write(f"{ANSIEscape.CSI}{num}L")
+        sys.__stdout__.flush()
+
+    @staticmethod
     def delete_lines(num: int = 1):
-        if num - 1 > 0:
-            ANSIEscape.move_cursor_n_lines(num - 1, False)
+        if num-1 > 0:
+            ANSIEscape.move_cursor_n_lines(num-1, True)
         sys.__stdout__.write(f"{ANSIEscape.CSI}{num}M")
         sys.__stdout__.flush()
 
@@ -223,6 +289,49 @@ class ANSIEscape(object):
         sys.__stdout__.write(f'{ANSIEscape.CSI}H\r')
         sys.__stdout__.write(f'{ANSIEscape.CSI}J\r')
         sys.__stdout__.flush()
+
+    @staticmethod
+    def set_window_title(text: str):
+        text = text[:255]  # Title can only be less or equal to 255 characters
+        sys.__stdout__.write(f"{ANSIEscape.OSC}2;{text}\x07")  # Terminating character is "Bell" \x07
+
+    @staticmethod
+    def set_scrolling_margins(top: int = None, bottom: int = None):
+        sys.__stdout__.write(f"{ANSIEscape.CSI}{top if isinstance(top, int) else ''};{bottom if isinstance(bottom, int) else ''}r")
+        sys.__stdout__.flush()
+
+    @staticmethod
+    def alternate_screen_buffer(enable: bool):
+        sys.__stdout__.write(f"{ANSIEscape.CSI}?1049{'h' if enable else 'l'}")
+
+    @staticmethod
+    def set_graphics_mode(*, foreground_color: int = None, background_color: int = None, extended_foreground: tuple = (255, 255, 255), extended_background: tuple = (0, 0, 0)):
+        parameters = ""
+        if foreground_color is not None:
+            parameters += f"{';' if len(parameters) > 0 else ''}{foreground_color}"
+        if foreground_color == ANSIEscape.ForegroundTextColor.extended:
+            parameters += f"{';' if len(parameters) > 0 else ''}{';'.join([hex(x)[2:] for x in extended_foreground])}"
+        if background_color is not None:
+            parameters += f"{';' if len(parameters) > 0 else ''}{background_color}"
+        if background_color == ANSIEscape.BackgroundTextColor.extended:
+            parameters += f"{';' if len(parameters) > 0 else ''}{';'.join([hex(x)[2:] for x in extended_background])}"
+        sys.__stdout__.write(f"{ANSIEscape.CSI}{parameters}m")
+
+    @staticmethod
+    def set_text_underline(enable: bool = False):
+        sys.__stdout__.write(f"{ANSIEscape.CSI}{'4' if enable else '24'}m")
+
+    @staticmethod
+    def swap_colors(negative: bool = True):
+        sys.__stdout__.write(f"{ANSIEscape.CSI}{'7' if negative else '27'}m")
+
+    @staticmethod
+    def reset_graphics_mode(text: bool = False, background: bool = False):
+        sys.__stdout__.write(f"{ANSIEscape.CSI}{'0' if text and background else ANSIEscape.ForegroundTextColor.default if text else ANSIEscape.BackgroundTextColor.default}m")
+
+    @staticmethod
+    def set_drawing_mode(enable: bool):
+        sys.__stdout__.write(f"{ANSIEscape.ESC}{'(0' if enable else '(B'}")
 
 def clear_terminal():
     if ANSIEscape.ansi_escape_ready():
@@ -548,10 +657,14 @@ class InstructionStorage(object):
         print(f"Reading {cur_dir}>>{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}")
         ANSIEscape.clear_current_line()
         ANSIEscape.set_cursor_pos(1, 4)
-        if cur_file is None:
-            cur_file = os.path.basename(cur_dir)
-        if cur_dir in cur_file:
-            cur_file = cur_file[len(cur_dir):]
+        if len(cur_dir) > 0:
+            if cur_file is None:
+                cur_file = os.path.basename(cur_dir)
+            if cur_dir in cur_file:
+                cur_file = cur_file[len(cur_dir):]
+        else:
+            if cur_file is None:
+                cur_file = ""
         print(f">>{cur_file if len(cur_file) > 0 else '~'}{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}")
         ANSIEscape.clear_current_line()
         ANSIEscape.set_cursor_pos(1, 6)
@@ -631,7 +744,15 @@ def get_src_path(srcpath: str, nodrivepath: str):
         ret = os.path.join(ret, p)
     return ret
 
-def recursive_fileiter(sdir):
+def is_in_ignored(path: str, ignored_paths: Set[Optional[str]]):
+    path = path.replace('\\', '/')
+    for ip in ignored_paths:
+        ip = ip.replace('\\', '/')
+        if path.startswith(ip):
+            return True
+    return False
+
+def recursive_fileiter(sdir, ignored_paths: Set[Optional[str]] = ()):
     ret = list()
     folders = list()
     if os.path.exists(sdir):
@@ -642,32 +763,33 @@ def recursive_fileiter(sdir):
                     folders.append(f.path)
             except FileNotFoundError as _e:
                 if os.path.islink(_e.filename) or Path(_e.filename).is_symlink():
-                    change_tracker.add_error(f"Folder {_e.filename} was found but it apparently is a {'sym' if Path(_e.filename).is_symlink() else ''}link that cannot be reached. {_e.__class__.__name__} {_e.args}")
+                    change_tracker.add_error(f"Folder {_e.filename} was found but it apparently is a {'sym' if Path(_e.filename).is_symlink() else ''}link that cannot be reached. {_e.__class__.__name__}: {_e.args}")
         for folder in folders:
-            ret.extend(recursive_fileiter(folder))
-        if os.path.isfile(sdir):
+            ret.extend(recursive_fileiter(folder, ignored_paths))
+        if os.path.isfile(sdir) and not is_in_ignored(sdir, ignored_paths):
             ret.append(sdir)
         for item in os.scandir(sdir):
             item: os.DirEntry
             try:
-                if item.is_file():
+                if item.is_file() and not is_in_ignored(item.path, ignored_paths):
                     ret.append(item)
             except FileNotFoundError as _e:
                 if os.path.islink(_e.filename) or Path(_e.filename).is_symlink():
-                    change_tracker.add_error(f"File {_e.filename} | {item.name} was found but it apparently is a {'sym' if Path(_e.filename).is_symlink() else ''}link that cannot be reached. {_e.__class__.__name__} {_e.args}")
+                    change_tracker.add_error(f"File {_e.filename} | {item.name} was found but it is apparently is a {'sym' if Path(_e.filename).is_symlink() else ''}link that cannot be reached. {_e.__class__.__name__}: {_e.args}")
             except Exception as _e:
                 change_tracker.add_error(f"Scanning File {item.name} raised an exception: {_e.__class__.__name__}: {_e.args}")
     else:
         change_tracker.add_error(f"Recursive FileIter could not find {sdir}", 2)
     return ret
 
-def recursive_folderiter(sdir):
+def recursive_folderiter(sdir, ignored_paths: Set[Optional[str]] = ()):
     ret = list()
     f: os.DirEntry
     subfolders = [f for f in os.scandir(sdir) if f.is_dir()]
     ret.extend(subfolders)
     for folder in subfolders:
-        ret.extend(recursive_folderiter(folder.path))
+        if is_in_ignored(folder.path, ignored_paths):
+            ret.extend(recursive_folderiter(folder.path))
     return ret
 
 def get_actual_filepath(p: str):
@@ -695,6 +817,8 @@ def process():
     ANSIEscape.set_cursor_display(False)
     for n, b in enumerate(allbkps):
         sd = os.path.normpath(b['path'])
+        ignored_paths_var = b.get("ignored_paths", ())
+        ignored_paths = {f"{os.path.join(sd, x)}" for x in ignored_paths_var}
         try:
             if not launch_args.args.nooutput:
                 file_instruction_list.print_scan_status("Checking Files for changes:", sd, n, num_bkps)
@@ -709,7 +833,7 @@ def process():
                     else:
                         file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_CREATE, sd, fp)
                 else:
-                    for f in recursive_fileiter(sd):
+                    for f in recursive_fileiter(sd, ignored_paths):
                         fspldrv = os.path.splitdrive(f.path)[1]
                         fp = os.path.join(bkp_root, get_bkp_path(fspldrv[1:] if fspldrv.startswith(("\\", "/")) else fspldrv))
                         if f.is_file():
@@ -722,15 +846,17 @@ def process():
                                 file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_CREATE, f.path, fp)
                     if b.get('snapshot_mode', False):
                         rnodrivetd = os.path.splitdrive(sd)[1]
-                        if os.path.exists(os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd))):
-                            for f in recursive_fileiter(os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd))):
+                        _back_path = os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd))
+                        _back_ignored_paths = {f"{os.path.join(_back_path, x)}" for x in ignored_paths_var}
+                        if os.path.exists(_back_path):
+                            for f in recursive_fileiter(_back_path, ignored_paths):
                                 rsflunod = os.path.splitdrive(f.path)[1]
                                 sf = get_src_path(sd, rsflunod)
                                 if not launch_args.args.nooutput:
                                     file_instruction_list.print_scan_status("Checking Files for changes:", os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd)), n, num_bkps, cur_file=f.path)
                                 if not os.path.exists(sf):
                                     file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_REMOVE if os.path.isfile(f.path) else ChangeTypes.CH_TYPE_REMOVEFOLDER, f.path)
-                            for f in recursive_folderiter(os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd))):
+                            for f in recursive_folderiter(_back_path, ignored_paths):
                                 rsflunod = os.path.splitdrive(f.path)[1]
                                 sf = get_src_path(sd, rsflunod)
                                 if not os.path.exists(sf):
@@ -743,6 +869,9 @@ def process():
                     change_tracker.add_error("{} Backup Source is Unavailable.".format(sd), wait_time=1)
         except Exception as _e:
             change_tracker.add_error(f"Scanning File {sd} raised an exception: {_e.__traceback__.tb_lineno} | {_e.__class__.__name__}: {_e.args}")
+    else:
+        if not launch_args.args.nooutput:
+            file_instruction_list.print_scan_status("Checking Files for changes:", "", num_bkps, num_bkps)
     ANSIEscape.set_cursor_display(True)
     if file_instruction_list.changes_num > 0:
         _changetext = "{0} Changes Required. {1} Updates, {2} Creations, {3} Removals. {4} I/OAction Size".format(file_instruction_list.changes_num,
@@ -754,9 +883,24 @@ def process():
         print(_changetext)
         dinfo = shutil.disk_usage(os.path.realpath('/' if os.name == 'nt' else __file__))
         print("This will {3} approximately {0} of space. {1} Available from {2}".format(format_bytes(abs(file_instruction_list.space_requirement)), format_bytes(dinfo.free), format_bytes(dinfo.total), "require" if file_instruction_list.space_requirement >= 0 else "free up"))
+        if not launch_args.args.nochangelist:
+            print(f"Printing a list of changes: {len(file_instruction_list.filechanges)}")
         if not launch_args.args.nopause:
             os.system("pause")
         ANSIEscape.set_cursor_display(False)
+        if not launch_args.args.nochangelist:
+            ANSIEscape.set_cursor_display(True)
+            _changesnum = len(file_instruction_list.filechanges)
+            for n, change in enumerate(file_instruction_list.filechanges):
+                ANSIEscape.save_cursor_pos(False)
+                _text = f"{_changesnum - (n+1)}: [{change.change_type}] {change.source} ->({format_bytes(change.diffspace)})-> {change.target}{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}"
+                ANSIEscape.insert_lines(count_lines(_text))
+                print(_text, end="", flush=True)
+                ANSIEscape.save_cursor_pos(True)
+            if not launch_args.args.nopause:
+                ANSIEscape.insert_lines(1)
+                os.system("pause")
+            ANSIEscape.set_cursor_display(False)
         if file_instruction_list.space_requirement > dinfo.free:
             print("Not Enough Space to finish the backup process. Exiting.")
             raise IOError("Not Enough Space")
@@ -841,8 +985,9 @@ def process():
                                                              "\n\n{} errors".format(file_change_errors) if file_change_errors != 0 else ""), should_print=False)
     else:
         print("{0}/{0}. 0 Required Changes Indexed.".format(len(allbkps)))
-        print("No Changes Found")
+        print("No Changes Found. Exiting")
         time.sleep(2)
+        sys.exit(0)
 
 
 finished_init = False
@@ -853,6 +998,7 @@ def start_menu():
     ap.add_argument("-no", "--nooutput", help="disable interface updates", action="store_true")
     ap.add_argument("-np", "--nopause", help="disable user input requirement", action="store_true")
     ap.add_argument("-nl", "--nologs", help="disable log creation", action="store_true")
+    ap.add_argument("-ncl", "--nochangelist", help="disable showing a list of changes before copying", action="store_true")
     args = ap.parse_args()
     launch_args.update_args(args)
     clear_terminal()
