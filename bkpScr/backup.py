@@ -11,6 +11,7 @@ import argparse
 import locale
 import platform
 from pathlib import Path
+from functools import cached_property
 
 from typing import Dict, Set, List, Optional
 
@@ -25,6 +26,8 @@ class Arguments(object):
 
 
 launch_args = Arguments()
+
+MAX_MODIFICATION_TIME_ERROR_OFFSET = 5
 
 try:
     if os.path.exists(os.path.join(os.path.dirname(os.path.realpath(__file__)), "config.json")):
@@ -574,7 +577,7 @@ class FileChangeInstruction(object):
     def diffsize(self):
         return abs(self.diffspace)
 
-    @property
+    @cached_property
     def sourcesize(self):
         if self.source is None:
             return 0
@@ -582,13 +585,29 @@ class FileChangeInstruction(object):
             return 0
         return os.stat(self.source).st_size
 
-    @property
+    @cached_property
     def targetsize(self):
         if self.target is None:
             return 0
         elif not os.path.exists(self.target):
             return 0
         return os.stat(self.target).st_size
+
+    @cached_property
+    def sourcemtime(self):
+        if self.source is None:
+            return 0
+        elif not os.path.exists(self.source):
+            return 0
+        return os.stat(self.source).st_mtime
+
+    @cached_property
+    def targetmtime(self):
+        if self.target is None:
+            return 0
+        elif not os.path.exists(self.target):
+            return 0
+        return os.stat(self.target).st_mtime
 
     def __hash__(self):
         return hash((self.change_type, self.source, self.target))
@@ -828,7 +847,7 @@ def process():
                 # Source Dir Exists
                 if os.path.isfile(sd):
                     if os.path.exists(fp):
-                        if os.stat(sd).st_mtime > os.stat(fp).st_mtime + 1 or b.get('force_backup', False):
+                        if os.stat(sd).st_mtime > os.stat(fp).st_mtime + MAX_MODIFICATION_TIME_ERROR_OFFSET or b.get('force_backup', False):
                             file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_UPDATE, sd, fp)
                     else:
                         file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_CREATE, sd, fp)
@@ -840,7 +859,7 @@ def process():
                             if not launch_args.args.nooutput:
                                 file_instruction_list.print_scan_status("Checking Files for changes:", sd, n, num_bkps, cur_file=f.path)
                             if os.path.exists(fp):
-                                if os.stat(f.path).st_mtime > os.stat(fp).st_mtime + 1 or b.get('force_backup', False):
+                                if os.stat(f.path).st_mtime > os.stat(fp).st_mtime + MAX_MODIFICATION_TIME_ERROR_OFFSET or b.get('force_backup', False):
                                     file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_UPDATE, f.path, fp)
                             else:
                                 file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_CREATE, f.path, fp)
@@ -892,13 +911,9 @@ def process():
             ANSIEscape.set_cursor_display(True)
             _changesnum = len(file_instruction_list.filechanges)
             for n, change in enumerate(file_instruction_list.filechanges):
-                ANSIEscape.save_cursor_pos(False)
-                _text = f"{_changesnum - (n+1)}: [{change.change_type}] {change.source} ->({format_bytes(change.diffspace)})-> {change.target}{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}"
-                ANSIEscape.insert_lines(count_lines(_text))
-                print(_text, end="", flush=True)
-                ANSIEscape.save_cursor_pos(True)
+                _text = f"{_changesnum - (n+1)}: [{change.change_type}] {change.source}<{format_bytes(change.sourcesize)}>mod@{notzformat.format(datetime.datetime.fromtimestamp(change.sourcemtime))}({change.sourcemtime})\n->({format_bytes(change.diffspace)})->\n{change.target}<{format_bytes(change.targetsize)}>mod@{notzformat.format(datetime.datetime.fromtimestamp(change.targetmtime))}({change.targetmtime}){ANSIEscape.CONTROLSYMBOL_clear_after_cursor}"
+                print(_text, flush=True)
             if not launch_args.args.nopause:
-                ANSIEscape.insert_lines(1)
                 os.system("pause")
             ANSIEscape.set_cursor_display(False)
         if file_instruction_list.space_requirement > dinfo.free:
