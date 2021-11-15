@@ -916,6 +916,7 @@ def process():
             if not launch_args.args.nopause:
                 os.system("pause")
             ANSIEscape.set_cursor_display(False)
+            clear_terminal()
         if file_instruction_list.space_requirement > dinfo.free:
             print("Not Enough Space to finish the backup process. Exiting.")
             raise IOError("Not Enough Space")
