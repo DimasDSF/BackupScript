@@ -910,8 +910,8 @@ def process():
         if not launch_args.args.nochangelist:
             ANSIEscape.set_cursor_display(True)
             _changesnum = len(file_instruction_list.filechanges)
-            for n, change in enumerate(file_instruction_list.filechanges):
-                _text = f"{_changesnum - (n+1)}: [{change.change_type}] {change.source}<{format_bytes(change.sourcesize)}>mod@{notzformat.format(datetime.datetime.fromtimestamp(change.sourcemtime))}({change.sourcemtime})\n->({format_bytes(change.diffspace)})->\n{change.target}<{format_bytes(change.targetsize)}>mod@{notzformat.format(datetime.datetime.fromtimestamp(change.targetmtime))}({change.targetmtime}){ANSIEscape.CONTROLSYMBOL_clear_after_cursor}"
+            for change in file_instruction_list.filechanges:
+                _text = f"[{change.change_type}]\n{change.source}\n  <{format_bytes(change.sourcesize)}>mod@{notzformat.format(datetime.datetime.fromtimestamp(change.sourcemtime))}({change.sourcemtime})\n->({format_bytes(change.diffspace)})->\n{change.target}\n  <{format_bytes(change.targetsize)}>mod@{notzformat.format(datetime.datetime.fromtimestamp(change.targetmtime))}({change.targetmtime})"
                 print(_text, flush=True)
             if not launch_args.args.nopause:
                 os.system("pause")
