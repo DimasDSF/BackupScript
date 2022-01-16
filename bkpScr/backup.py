@@ -1058,10 +1058,10 @@ def start_menu():
                 print(ANSIEscape.get_colored_text('-------------------------------', text_color=ANSIEscape.ForegroundTextColor.red))
             else:
                 if lvd[0] is True:
-                    print("This is the latest version")
+                    print(ANSIEscape.get_colored_text("This is the latest version", text_color=ANSIEscape.ForegroundTextColor.green))
                 else:
-                    print("!OUTDATED Version! Latest: {0}/{1}. Built: {2}".format(lvd[1].get("version"), lvd[1].get("coderev"), lvd[1].get("buildtime")))
-                    print('Press any key to download an update.')
+                    print(ANSIEscape.get_colored_text("!OUTDATED Version! Latest: {0}/{1}. Built: {2}".format(lvd[1].get("version"), lvd[1].get("coderev"), lvd[1].get("buildtime")), text_color=ANSIEscape.ForegroundTextColor.yellow))
+                    print(ANSIEscape.get_colored_text('Press any key to download an update.', text_color=ANSIEscape.ForegroundTextColor.yellow))
                     if not args.nopause:
                         os.system('pause >nul')
                     else:
@@ -1069,8 +1069,9 @@ def start_menu():
                     dl_update()
     else:
         _buildstamp = version.get("buildstamp", 0)
-        if time.time() - _buildstamp > 5184000:  # 60 days
-            print(f"Running in OFFLINE Mode\nBuild time: {datetime.datetime.fromtimestamp(_buildstamp, tz=shift_tz)} ({datetime.timedelta(seconds=(time.time() - _buildstamp)).days} days old).\nMay be outdated.")
+        _days = datetime.timedelta(seconds=(time.time() - _buildstamp)).days
+        if _days > 60:  # 60 days
+            print(f"{ANSIEscape.get_colored_text('Running in OFFLINE Mode', text_color=ANSIEscape.ForegroundTextColor.yellow)}\nBuild time: {datetime.datetime.fromtimestamp(_buildstamp, tz=shift_tz)} ({ANSIEscape.get_colored_text(str(_days), text_color=ANSIEscape.ForegroundTextColor.red if _days > 100 else ANSIEscape.ForegroundTextColor.yellow)} days old).\nMay be outdated.")
     if not args.nopause:
         os.system("pause >nul")
     change_tracker.add_log("Starting backup process")
@@ -1128,7 +1129,7 @@ def start_menu():
                 ul.writelines(change_tracker.errors)
     print("Done.")
     if change_tracker.num_errors > 0:
-        print(f"Encountered {change_tracker.num_errors} errors.")
+        print(f"{ANSIEscape.get_colored_text(f'Encountered {change_tracker.num_errors} errors.', text_color=ANSIEscape.ForegroundTextColor.yellow)}")
         time.sleep(2)
         if args.nologs:
             print("\n".join(change_tracker.errors))
