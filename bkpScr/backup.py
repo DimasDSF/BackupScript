@@ -308,7 +308,7 @@ class ANSIEscape(object):
         sys.__stdout__.write(f"{ANSIEscape.CSI}?1049{'h' if enable else 'l'}")
 
     @staticmethod
-    def set_graphics_mode(*, foreground_color: int = None, background_color: int = None, extended_foreground: tuple = (255, 255, 255), extended_background: tuple = (0, 0, 0)):
+    def get_graphics_mode_changer(*, foreground_color: int = None, background_color: int = None, extended_foreground: tuple = (255, 255, 255), extended_background: tuple = (0, 0, 0)):
         parameters = ""
         if foreground_color is not None:
             parameters += f"{';' if len(parameters) > 0 else ''}{foreground_color}"
@@ -318,7 +318,14 @@ class ANSIEscape(object):
             parameters += f"{';' if len(parameters) > 0 else ''}{background_color}"
         if background_color == ANSIEscape.BackgroundTextColor.extended:
             parameters += f"{';' if len(parameters) > 0 else ''}{';'.join([hex(x)[2:] for x in extended_background])}"
-        sys.__stdout__.write(f"{ANSIEscape.CSI}{parameters}m")
+        return f"{ANSIEscape.CSI}{parameters}m"
+
+    @staticmethod
+    def set_graphics_mode(*, foreground_color: int = None, background_color: int = None, extended_foreground: tuple = (255, 255, 255), extended_background: tuple = (0, 0, 0)):
+        sys.__stdout__.write(ANSIEscape.get_graphics_mode_changer(foreground_color=foreground_color,
+                                                                  background_color=background_color,
+                                                                  extended_foreground=extended_foreground,
+                                                                  extended_background=extended_background))
 
     @staticmethod
     def set_text_underline(enable: bool = False):
@@ -329,8 +336,19 @@ class ANSIEscape(object):
         sys.__stdout__.write(f"{ANSIEscape.CSI}{'7' if negative else '27'}m")
 
     @staticmethod
+    def get_graphics_mode_reset_char(text: bool = False, background: bool = False):
+        return f"{ANSIEscape.CSI}{'0' if text and background else ANSIEscape.ForegroundTextColor.default if text else ANSIEscape.BackgroundTextColor.default}m"
+
+    @staticmethod
     def reset_graphics_mode(text: bool = False, background: bool = False):
-        sys.__stdout__.write(f"{ANSIEscape.CSI}{'0' if text and background else ANSIEscape.ForegroundTextColor.default if text else ANSIEscape.BackgroundTextColor.default}m")
+        sys.__stdout__.write(ANSIEscape.get_graphics_mode_reset_char(text, background))
+
+    @staticmethod
+    def get_colored_text(text: str, text_color: int = None, background_color: int = None):
+        if text_color is None and background_color is None:
+            return text
+        return f"{ANSIEscape.get_graphics_mode_changer(foreground_color=text_color, background_color=background_color)}{text}{ANSIEscape.get_graphics_mode_reset_char(text=True, background=True)}"
+
 
     @staticmethod
     def set_drawing_mode(enable: bool):
@@ -440,7 +458,7 @@ def dl_update():
                         text = dld_data.read().decode(encoding=locale.getdefaultlocale()[1])
                         dl.write(text)
     except Exception as update_exception:
-        print("Update Failed due to an Exception: {0} / {1}".format(type(update_exception).__name__, update_exception.args))
+        print(ANSIEscape.get_colored_text("Update Failed due to an Exception: {0} / {1}".format(type(update_exception).__name__, update_exception.args), ANSIEscape.ForegroundTextColor.red))
     else:
         print("Update Finished.\nRestarting", end="")
         for t in range(3):
@@ -911,14 +929,16 @@ def process():
             ANSIEscape.set_cursor_display(True)
             _changesnum = len(file_instruction_list.filechanges)
             for change in file_instruction_list.filechanges:
-                _text = f"[{change.change_type}]\n{change.source}\n  <{format_bytes(change.sourcesize)}>mod@{notzformat.format(datetime.datetime.fromtimestamp(change.sourcemtime))}({change.sourcemtime})\n->({format_bytes(change.diffspace)})->\n{change.target}\n  <{format_bytes(change.targetsize)}>mod@{notzformat.format(datetime.datetime.fromtimestamp(change.targetmtime))}({change.targetmtime})"
+                _text = f"[{ANSIEscape.get_colored_text(change.change_type, text_color=ANSIEscape.ForegroundTextColor.red if change.change_type == ChangeTypes.CH_TYPE_REMOVE else ANSIEscape.ForegroundTextColor.green if change.change_type == ChangeTypes.CH_TYPE_CREATE else ANSIEscape.ForegroundTextColor.bright_green if change.change_type == ChangeTypes.CH_TYPE_UPDATE else None)}]\n{change.source}\n  <{format_bytes(change.sourcesize)}>mod@{notzformat.format(datetime.datetime.fromtimestamp(change.sourcemtime))}({change.sourcemtime})\n  ~{format_bytes(change.diffspace)}~\n{change.target}"
+                if change.change_type == ChangeTypes.CH_TYPE_UPDATE:
+                    _text += f"\n  <{format_bytes(change.targetsize)}>mod@{notzformat.format(datetime.datetime.fromtimestamp(change.targetmtime))}({change.targetmtime})"
                 print(_text, flush=True)
             if not launch_args.args.nopause:
                 os.system("pause")
             ANSIEscape.set_cursor_display(False)
             clear_terminal()
         if file_instruction_list.space_requirement > dinfo.free:
-            print("Not Enough Space to finish the backup process. Exiting.")
+            print(ANSIEscape.get_colored_text("Not Enough Space to finish the backup process. Exiting.", text_color=ANSIEscape.ForegroundTextColor.red, background_color=ANSIEscape.BackgroundTextColor.yellow))
             raise IOError("Not Enough Space")
         file_change_errors = 0
         bytes_done = 0
@@ -936,7 +956,7 @@ def process():
             print(f"{current_file_num} / {num_files} done. DiffSize: {format_bytes(_cur_file.diffsize)}{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}")
             print(f"{get_progress_bar(round(current_file_num * 100 / num_files, 2))}{round(current_file_num * 100 / num_files, 2)}%")
             print(f"{get_progress_bar(round(((abs(bytes_done) / bytes_to_modify) if bytes_to_modify != 0 else 1) * 100, 2))}{format_bytes(bytes_done)}/{format_bytes(bytes_to_modify)}{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}")
-            print("\n\n{} errors".format(file_change_errors) if file_change_errors != 0 else "")
+            print("\n\n{0} errors".format(ANSIEscape.get_colored_text(str(file_change_errors), text_color=ANSIEscape.ForegroundTextColor.red)) if file_change_errors != 0 else "")
 
         if launch_args.args.nooutput:
             print("In Progress | No Output Mode.")
@@ -998,7 +1018,7 @@ def process():
         change_tracker.add_log("{0} / {1} done.\n{2}%\n{3}".format(num_files - file_change_errors,
                                                              num_files,
                                                              round((num_files - file_change_errors) * 100 / num_files, 2),
-                                                             "\n\n{} errors".format(file_change_errors) if file_change_errors != 0 else ""), should_print=False)
+                                                             "\n\n{} errors".format(ANSIEscape.get_colored_text(str(file_change_errors), text_color=ANSIEscape.ForegroundTextColor.red)) if file_change_errors != 0 else ""), should_print=False)
     else:
         print("{0}/{0}. 0 Required Changes Indexed.".format(len(allbkps)))
         print("No Changes Found. Exiting")
@@ -1031,11 +1051,11 @@ def start_menu():
             print("Latest Version Data is Unavailable")
         else:
             if lvd[2] is True:
-                print('-------------------------------')
-                print('INDEV VERSION PREVENTING UPDATE')
-                print(f'Latest: {lvd[1].get("version")}/{lvd[1].get("coderev")} Built: {lvd[1].get("buildtime")}')
-                print('INDEV VERSION PREVENTING UPDATE')
-                print('-------------------------------')
+                print(ANSIEscape.get_colored_text('-------------------------------', text_color=ANSIEscape.ForegroundTextColor.red))
+                print(ANSIEscape.get_colored_text('INDEV VERSION PREVENTING UPDATE', text_color=ANSIEscape.ForegroundTextColor.red))
+                print(ANSIEscape.get_colored_text(f'Latest: {lvd[1].get("version")}/{lvd[1].get("coderev")} Built: {lvd[1].get("buildtime")}', text_color=ANSIEscape.ForegroundTextColor.red))
+                print(ANSIEscape.get_colored_text('INDEV VERSION PREVENTING UPDATE', text_color=ANSIEscape.ForegroundTextColor.red))
+                print(ANSIEscape.get_colored_text('-------------------------------', text_color=ANSIEscape.ForegroundTextColor.red))
             else:
                 if lvd[0] is True:
                     print("This is the latest version")
