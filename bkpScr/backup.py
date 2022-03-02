@@ -4,6 +4,7 @@ import sys
 import time
 import json
 import shutil
+import stat
 import math
 import socket
 import urllib.request
@@ -11,9 +12,9 @@ import argparse
 import locale
 import platform
 from pathlib import Path
-from functools import cached_property
+from functools import cached_property, partial
 
-from typing import Dict, Set, List, Optional
+from typing import Dict, Set, List, Optional, Callable
 
 HARD_CONFIG_VER = 1
 LATEST_VER_DATA_URL = "https://raw.githubusercontent.com/DimasDSF/BackupScript/master/bkpScr/version.json"
@@ -467,6 +468,121 @@ def dl_update():
             time.sleep(1)
         python = sys.executable
         os.execl(python, python, *sys.argv)
+
+#####################################################
+
+############################################
+# shutil replacement with callback support #
+############################################
+def copy_with_callback(src, dst, *, follow_symlinks=True, callback: Callable[[int, int], None] = None):
+    """Copy data and metadata. Return the file's destination.
+    Metadata is copied with copystat(). Please see the copystat function
+    for more information.
+    The destination may be a directory.
+    If follow_symlinks is false, symlinks won't be followed. This
+    resembles GNU's "cp -P src dst".
+    """
+    if os.path.isdir(dst):
+        dst = os.path.join(dst, os.path.basename(src))
+    copyfile_w_callback(src, dst, follow_symlinks=follow_symlinks, callback=callback)
+    shutil.copystat(src, dst, follow_symlinks=follow_symlinks)
+    return dst
+
+# noinspection PyUnresolvedReferences,PyProtectedMember
+def copyfile_w_callback(src, dst, *, follow_symlinks=True, callback: Callable[[int, int], None] = None):
+    """Copy data from src to dst in the most efficient way possible.
+    If follow_symlinks is not set and src is a symbolic link, a new
+    symlink will be created instead of copying the file it points to.
+    """
+    sys.audit("shutil.copyfile", src, dst)
+
+    if shutil._samefile(src, dst):
+        raise shutil.SameFileError("{!r} and {!r} are the same file".format(src, dst))
+
+    file_size = 0
+    for i, fn in enumerate([src, dst]):
+        try:
+            st = shutil._stat(fn)
+        except OSError:
+            # File most likely does not exist
+            pass
+        else:
+            # XXX What about other special files? (sockets, devices...)
+            if stat.S_ISFIFO(st.st_mode):
+                fn = fn.path if isinstance(fn, os.DirEntry) else fn
+                raise shutil.SpecialFileError("`%s` is a named pipe" % fn)
+            if shutil._WINDOWS and i == 0:
+                file_size = st.st_size
+
+    if not follow_symlinks and shutil._islink(src):
+        os.symlink(os.readlink(src), dst)
+    else:
+        with open(src, 'rb') as fsrc, open(dst, 'wb') as fdst:
+            # macOS
+            if shutil._HAS_FCOPYFILE:
+                try:
+                    shutil._fastcopy_fcopyfile(fsrc, fdst, shutil.posix._COPYFILE_DATA)
+                    return dst
+                except shutil._GiveupOnFastCopy:
+                    pass
+            # Linux
+            elif shutil._USE_CP_SENDFILE:
+                try:
+                    shutil._fastcopy_sendfile(fsrc, fdst)
+                    return dst
+                except shutil._GiveupOnFastCopy:
+                    pass
+            # Windows, see:
+            # https://github.com/python/cpython/pull/7160#discussion_r195405230
+            elif shutil._WINDOWS and file_size > 0:
+                _copyfileobj_readinto_w_cb(fsrc, fdst, min(file_size, shutil.COPY_BUFSIZE), callback=callback, filesize=file_size)  # noqa
+                return dst
+
+            copyfileobj_w_callback(fsrc, fdst, callback=callback, filesize=file_size)
+
+    return dst
+
+# noinspection PyUnresolvedReferences,PyProtectedMember
+def copyfileobj_w_callback(fsrc, fdst, length=0, *, callback: Callable[[int, int], None] = None, filesize: int = None):
+    """copy data from file-like object fsrc to file-like object fdst"""
+    # Localize variable access to minimize overhead.
+    if not length:
+        length = shutil.COPY_BUFSIZE
+    fsrc_read = fsrc.read
+    fdst_write = fdst.write
+    copied = 0
+    while True:
+        buf = fsrc_read(length)
+        if not buf:
+            break
+        fdst_write(buf)
+        if callback is not None:
+            copied += len(buf)
+            callback(copied, filesize)
+
+# noinspection PyUnresolvedReferences,PyProtectedMember
+def _copyfileobj_readinto_w_cb(fsrc, fdst, length=shutil.COPY_BUFSIZE, *, callback: Callable[[int, int], None] = None, filesize: int = None):
+    """readinto()/memoryview() based variant of copyfileobj().
+    *fsrc* must support readinto() method and both files must be
+    open in binary mode.
+    """
+    # Localize variable access to minimize overhead.
+    fsrc_readinto = fsrc.readinto
+    fdst_write = fdst.write
+    copied = 0
+    with memoryview(bytearray(length)) as mv:
+        while True:
+            n = fsrc_readinto(mv)
+            if not n:
+                break
+            elif n < length:
+                with mv[:n] as smv:
+                    fdst.write(smv)
+            else:
+                fdst_write(mv)
+            if callback is not None:
+                copied += n
+                callback(copied, filesize)
 
 #####################################################
 
@@ -954,9 +1070,19 @@ def process():
             ANSIEscape.clear_current_line()
             ANSIEscape.set_cursor_pos(1, 6)
             print(f"{current_file_num} / {num_files} done. DiffSize: {format_bytes(_cur_file.diffsize)}{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}")
-            print(f"{get_progress_bar(round(current_file_num * 100 / num_files, 2))}{round(current_file_num * 100 / num_files, 2)}%")
+            print(f"{get_progress_bar(0)}0.00% | Current File.{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}")
+            print(f"{get_progress_bar(round(current_file_num * 100 / num_files, 2))}{round(current_file_num * 100 / num_files, 2)}% | Total files.{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}")
             print(f"{get_progress_bar(round(((abs(bytes_done) / bytes_to_modify) if bytes_to_modify != 0 else 1) * 100, 2))}{format_bytes(bytes_done)}/{format_bytes(bytes_to_modify)}{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}")
             print("\n\n{0} errors".format(ANSIEscape.get_colored_text(str(file_change_errors), text_color=ANSIEscape.ForegroundTextColor.red)) if file_change_errors != 0 else "")
+
+        def print_cur_status(diffsize, current, total):
+            ANSIEscape.set_cursor_pos(1, 7)
+            _ratio = current / total
+            _percentage: float = round(_ratio * 100, 2)
+            print(f"{get_progress_bar(_percentage)}{_percentage:.2f}% | Current File.{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}", flush=True)
+            print(f"{get_progress_bar(round((current_file_num+_ratio) * 100 / num_files, 2))}{round((current_file_num+_ratio) * 100 / num_files, 2):.2f}% | Total files.{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}")
+            _done = bytes_done + diffsize * _ratio
+            print(f"{get_progress_bar(round(((abs(_done) / bytes_to_modify) if bytes_to_modify != 0 else 1) * 100, 2))}{format_bytes(_done)}/{format_bytes(bytes_to_modify)}{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}")
 
         if launch_args.args.nooutput:
             print("In Progress | No Output Mode.")
@@ -964,7 +1090,6 @@ def process():
         current_file_num = 0
         while file_instruction_list.changes_num > 0:
             _cur_file = file_instruction_list.get_file_change()
-            current_file_num += 1
             if _cur_file.target is not None:
                 if not os.path.exists(os.path.dirname(_cur_file.target)):
                     try:
@@ -983,9 +1108,9 @@ def process():
                                                                                         os.path.split(_cur_file.source)[1],
                                                                                         format_bytes(_cur_file.diffsize)), should_print=False)
                 if _cur_file.change_type == ChangeTypes.CH_TYPE_UPDATE:
-                    bytes_done += _cur_file.diffsize
                     act_filepath = get_actual_filepath(_cur_file.target)
-                    shutil.copy2(_cur_file.source, os.path.dirname(act_filepath))
+                    copy_with_callback(_cur_file.source, os.path.dirname(act_filepath), callback=partial(print_cur_status, _cur_file.diffsize))  # noqa
+                    bytes_done += _cur_file.diffsize
                     change_tracker.add_file_change(ChangeTypes.CH_TYPE_UPDATE, "Updated | {0} | {1} -> {2}".format(_cur_file.source,
                                                                                                  get_modification_dt_from_file(_cur_file.source),
                                                                                                  get_modification_dt_from_file(_cur_file.target)),
@@ -996,8 +1121,8 @@ def process():
                                                                                                      os.path.basename(act_filepath),
                                                                                                      os.path.basename(_cur_file.source)))
                 elif _cur_file.change_type == ChangeTypes.CH_TYPE_CREATE:
+                    copy_with_callback(_cur_file.source, os.path.dirname(_cur_file.target), callback=partial(print_cur_status, _cur_file.diffsize))  # noqa
                     bytes_done += _cur_file.diffsize
-                    shutil.copy2(_cur_file.source, os.path.dirname(_cur_file.target))
                     change_tracker.add_file_change(ChangeTypes.CH_TYPE_CREATE, "Created | {0}".format(_cur_file.source), should_print=False)
                 elif _cur_file.change_type == ChangeTypes.CH_TYPE_REMOVE or _cur_file.change_type == ChangeTypes.CH_TYPE_REMOVEFOLDER:
                     bytes_done += _cur_file.diffsize
@@ -1006,6 +1131,8 @@ def process():
             except Exception as fileupd_exception:
                 change_tracker.add_error("Failed to {3} file: {0} due to an Exception {1}. {2}".format(str(_cur_file), type(fileupd_exception).__name__, fileupd_exception.args, _cur_file.change_type), wait_time=5)
                 file_change_errors += 1
+            finally:
+                current_file_num += 1
         file_instruction_list.invalidate_cache()
         clear_terminal()
         print("Finished Copying.")
