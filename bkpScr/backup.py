@@ -1,4 +1,5 @@
 import datetime
+import io
 import os
 import sys
 import time
@@ -12,9 +13,10 @@ import argparse
 import locale
 import platform
 from pathlib import Path
-from functools import cached_property, partial
+from functools import cached_property, partial, reduce, lru_cache
+import operator
 
-from typing import Dict, Set, List, Optional, Callable
+from typing import Dict, Set, List, Optional, Callable, Union
 
 HARD_CONFIG_VER = 1
 LATEST_VER_DATA_URL = "https://raw.githubusercontent.com/DimasDSF/BackupScript/master/bkpScr/version.json"
@@ -101,6 +103,35 @@ except Exception as e:
 
 def get_cur_dt():
     return datetime.datetime.now(shift_tz)
+
+def deep_get(data, vals: list, default: any = None, *, return_none: bool = False):
+    def _getter(__a, __b):
+        try:
+            return operator.getitem(__a, __b)
+        except TypeError as _e:
+            try:
+                if hasattr(__a, __b):
+                    return getattr(__a, __b)
+            except:
+                raise _e
+    try:
+        return reduce(_getter, vals, data)
+    except (KeyError, IndexError, NameError) as _e:
+        if default is not None or return_none:
+            return default
+        else:
+            raise
+
+def get_first_available(data, keys: list, default: any = None):
+    for k in keys:
+        try:
+            if isinstance(k, list):
+                return deep_get(data, k)
+            elif isinstance(k, (str, int)):
+                return data[k]
+        except:
+            continue
+    return default
 
 ############################
 #        CLI Utils         #
@@ -585,6 +616,10 @@ def _copyfileobj_readinto_w_cb(fsrc, fdst, length=shutil.COPY_BUFSIZE, *, callba
 
 #####################################################
 
+@lru_cache(maxsize=None)
+def get_modification_time(path: str):
+    return os.stat(path).st_mtime
+
 class ModTimestampDB(object):
     def __init__(self, storage_path: str = "db/timestamps.json", *, autosave: bool = False):
         self.storage_rel_path = storage_path
@@ -597,18 +632,17 @@ class ModTimestampDB(object):
     def storage(self):
         return os.path.join(os.path.dirname(os.path.realpath(__file__)), self.storage_rel_path)
 
-    def get_timestamp(self, filepath: str):
-        if not os.path.exists(filepath):
-            return 0
-        _ts = self.data.get(filepath.replace("\\", "/"), None)
+    def get_timestamp(self, filepath: Union[str, os.DirEntry]):
+        fp = filepath if isinstance(filepath, str) else filepath.path
+        _ts = self.data.get(fp.replace("\\", "/"), None)
         if _ts is None:
-            _ts = os.stat(filepath).st_mtime
-            self.save_timestamp(filepath, _ts, force=True)
+            _ts = get_modification_time(filepath) if isinstance(filepath, str) else filepath.stat().st_mtime
+            self.save_timestamp(fp, _ts, force=True)
         return _ts
 
     def save_timestamp(self, filepath: str, timestamp: float = None, *, force: bool = False):
         if timestamp is None:
-            timestamp = os.stat(filepath).st_mtime
+            timestamp = get_modification_time(filepath)
         if abs(self.data.get(filepath.replace("\\", "/"), 0) - timestamp) > MAX_MODIFICATION_TIME_ERROR_OFFSET or force:
             self.data[filepath.replace("\\", "/")] = timestamp
             self.unsaved_changes += 1
@@ -775,7 +809,7 @@ class FileChangeInstruction(object):
             return 0
         elif not os.path.exists(self.source):
             return 0
-        return os.stat(self.source).st_mtime
+        return get_modification_time(self.source)
 
     @cached_property
     def targetmtime(self):
@@ -783,7 +817,7 @@ class FileChangeInstruction(object):
             return 0
         elif not os.path.exists(self.target):
             return 0
-        return os.stat(self.target).st_mtime
+        return get_modification_time(self.target)
 
     def __hash__(self):
         return hash((self.change_type, self.source, self.target))
@@ -889,7 +923,7 @@ def del_file_or_dir(path):
 
 def get_modification_dt_from_file(filepath):
     try:
-        return datetime.datetime.fromtimestamp(os.stat(filepath).st_mtime)
+        return datetime.datetime.fromtimestamp(get_modification_time(filepath))
     except:
         return None
 
@@ -948,10 +982,30 @@ def is_in_ignored(path: str, ignored_paths: Set[Optional[str]]):
             return True
     return False
 
+def scan_directory(sdir: str, ignored_paths: Set[Optional[str]] = ()) -> Union[Dict[str, os.DirEntry], os.DirEntry]:
+    ret = dict()
+    if os.path.exists(sdir):
+        try:
+            for f in os.scandir(sdir):
+                f: os.DirEntry
+                if not is_in_ignored(f.path, ignored_paths):
+                    if f.is_file():
+                        ret[f.name] = f
+                    elif f.is_dir():
+                        ret[f.name] = scan_directory(f.path, ignored_paths=ignored_paths)
+        except NotADirectoryError:
+            ret = os.stat(sdir)  # noqa
+    return ret
+
 def recursive_fileiter(sdir, ignored_paths: Set[Optional[str]] = ()):
     ret = list()
     folders = list()
     if os.path.exists(sdir):
+        if os.path.isfile(sdir):
+            for x in os.scandir(os.path.dirname(sdir)):
+                x: os.DirEntry
+                if x.name == os.path.basename(sdir):
+                    return [x]
         for f in os.scandir(sdir):
             f: os.DirEntry
             try:
@@ -1011,6 +1065,9 @@ def process():
     if not launch_args.args.nooutput:
         clear_terminal()
     ANSIEscape.set_cursor_display(False)
+    print("Compiling pathlists...", end="")
+    bkpscan = scan_directory(bkp_root)
+    print(" Done.")
     for n, b in enumerate(allbkps):
         sd = os.path.normpath(b['path'])
         ignored_paths_var = b.get("ignored_paths", ())
@@ -1021,42 +1078,28 @@ def process():
             p = os.path.splitdrive(sd)[1]
             fp = os.path.join(bkp_root, get_bkp_path(p[1:] if p.startswith(("\\", "/")) else p))
             if os.path.exists(sd):
-                # Source Dir Exists
-                if os.path.isfile(sd):
-                    if os.path.exists(fp):
-                        if os.stat(sd).st_mtime > modification_timestamp_db.get_timestamp(fp) + MAX_MODIFICATION_TIME_ERROR_OFFSET or b.get('force_backup', False):
-                            file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_UPDATE, sd, fp)
+                sourcescan = recursive_fileiter(sd, ignored_paths)
+                for f in sourcescan:
+                    fspldrv = os.path.splitdrive(f.path)[1]
+                    filep = os.path.join(bkp_root, get_bkp_path(fspldrv[1:] if fspldrv.startswith(("\\", "/")) else fspldrv))
+                    file: Optional[os.DirEntry] = deep_get(bkpscan, filep.split("\\")[1:], return_none=True)
+                    if not launch_args.args.nooutput:
+                        file_instruction_list.print_scan_status("Checking Files for changes:", sd, n, num_bkps, cur_file=f.path)
+                    if file is not None:
+                        if f.stat().st_mtime > modification_timestamp_db.get_timestamp(file) + MAX_MODIFICATION_TIME_ERROR_OFFSET or b.get('force_backup', False):
+                            file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_UPDATE, f.path, filep)
                     else:
-                        file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_CREATE, sd, fp)
-                else:
-                    for f in recursive_fileiter(sd, ignored_paths):
-                        fspldrv = os.path.splitdrive(f.path)[1]
-                        fp = os.path.join(bkp_root, get_bkp_path(fspldrv[1:] if fspldrv.startswith(("\\", "/")) else fspldrv))
-                        if f.is_file():
-                            if not launch_args.args.nooutput:
-                                file_instruction_list.print_scan_status("Checking Files for changes:", sd, n, num_bkps, cur_file=f.path)
-                            if os.path.exists(fp):
-                                if os.stat(f.path).st_mtime > modification_timestamp_db.get_timestamp(fp) + MAX_MODIFICATION_TIME_ERROR_OFFSET or b.get('force_backup', False):
-                                    file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_UPDATE, f.path, fp)
-                            else:
-                                file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_CREATE, f.path, fp)
-                    if b.get('snapshot_mode', False):
-                        rnodrivetd = os.path.splitdrive(sd)[1]
-                        _back_path = os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd))
-                        _back_ignored_paths = {f"{os.path.join(_back_path, x)}" for x in ignored_paths_var}
-                        if os.path.exists(_back_path):
-                            for f in recursive_fileiter(_back_path, ignored_paths):
-                                rsflunod = os.path.splitdrive(f.path)[1]
-                                sf = get_src_path(sd, rsflunod)
-                                if not launch_args.args.nooutput:
-                                    file_instruction_list.print_scan_status("Checking Files for changes:", os.path.join(bkp_root, get_bkp_path(rnodrivetd[1:] if rnodrivetd.startswith(("\\", "/")) else rnodrivetd)), n, num_bkps, cur_file=f.path)
-                                if not os.path.exists(sf):
-                                    file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_REMOVE if os.path.isfile(f.path) else ChangeTypes.CH_TYPE_REMOVEFOLDER, f.path)
-                            for f in recursive_folderiter(_back_path, ignored_paths):
-                                rsflunod = os.path.splitdrive(f.path)[1]
-                                sf = get_src_path(sd, rsflunod)
-                                if not os.path.exists(sf):
-                                    file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_REMOVE if os.path.isfile(f.path) else ChangeTypes.CH_TYPE_REMOVEFOLDER, f.path)
+                        file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_CREATE, f.path, filep)
+                if b.get('snapshot_mode', False) and os.path.exists(fp):
+                    _back_ignored_paths = {f"{os.path.join(fp, x)}" for x in ignored_paths_var}
+                    bkp_rec_scan: List[os.DirEntry] = recursive_fileiter(fp, ignored_paths)
+                    reverse_source_scan: Union[Dict[str, os.DirEntry], os.DirEntry] = scan_directory(sd, ignored_paths)
+                    for bkpf in bkp_rec_scan:
+                        rsflunod = os.path.splitdrive(bkpf.path)[1].replace("\\", "/")[len(bkp_root):]
+                        sf = get_src_path(sd, rsflunod)[len(sd):].replace("\\", "/")
+                        sfile: Optional[os.DirEntry] = deep_get(reverse_source_scan, sf[1 if sf.startswith("/") else None:].split("/"), return_none=True)
+                        if sfile is None:
+                            file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_REMOVE if os.path.isfile(bkpf.path) else ChangeTypes.CH_TYPE_REMOVEFOLDER, bkpf.path)
             else:
                 if b.get('snapshot_mode', False):
                     if os.path.exists(fp):
@@ -1200,23 +1243,15 @@ def process():
 finished_init = False
 def start_menu():
     global finished_init
-    ap = argparse.ArgumentParser()
-    ap.add_argument("-O", "--offline", help="Run in guaranteed offline mode, prevents version checks", action="store_true")
-    ap.add_argument("-no", "--nooutput", help="disable interface updates", action="store_true")
-    ap.add_argument("-np", "--nopause", help="disable user input requirement", action="store_true")
-    ap.add_argument("-nl", "--nologs", help="disable log creation", action="store_true")
-    ap.add_argument("-ncl", "--nochangelist", help="disable showing a list of changes before copying", action="store_true")
-    args = ap.parse_args()
-    launch_args.update_args(args)
     clear_terminal()
     modes = ""
-    for a, ast in args.__dict__.items():
+    for a, ast in launch_args.args.__dict__.items():
         if ast is True:
             if len(modes) > 0:
                 modes += "\n"
             modes += "{0} mode enabled".format(a)
     print("Automated Backup Script.{2}\nVersion:{0}/{1}\nTimestamp DB entries: {3}\nPress any key to proceed\nClose the app to cancel.".format(version.get('version', "Unavailable"), version.get('coderev', "Unavailable"), "\n{}".format(modes) if len(modes) > 0 else "", len(modification_timestamp_db.data)))
-    if not args.offline:
+    if not launch_args.args.offline:
         lvd = is_latest_version()
         if lvd is None:
             print("Latest Version Data is Unavailable")
@@ -1233,7 +1268,7 @@ def start_menu():
                 else:
                     print(ANSIEscape.get_colored_text("!OUTDATED Version! Latest: {0}/{1}. Built: {2}".format(lvd[1].get("version"), lvd[1].get("coderev"), lvd[1].get("buildtime")), text_color=ANSIEscape.ForegroundTextColor.yellow))
                     print(ANSIEscape.get_colored_text('Press any key to download an update.', text_color=ANSIEscape.ForegroundTextColor.yellow))
-                    if not args.nopause:
+                    if not launch_args.args.nopause:
                         os.system('pause >nul')
                     else:
                         time.sleep(5)
@@ -1243,7 +1278,7 @@ def start_menu():
         _days = datetime.timedelta(seconds=(time.time() - _buildstamp)).days
         if _days > 60:  # 60 days
             print(f"{ANSIEscape.get_colored_text('Running in OFFLINE Mode', text_color=ANSIEscape.ForegroundTextColor.yellow)}\nBuild time: {datetime.datetime.fromtimestamp(_buildstamp, tz=shift_tz)} ({ANSIEscape.get_colored_text(str(_days), text_color=ANSIEscape.ForegroundTextColor.red if _days > 100 else ANSIEscape.ForegroundTextColor.yellow)} days old).\nMay be outdated.")
-    if not args.nopause:
+    if not launch_args.args.nopause:
         os.system("pause >nul")
     change_tracker.add_log("Starting backup process")
     time.sleep(2)
@@ -1267,7 +1302,7 @@ def start_menu():
                                                                                                     str(datetime.datetime.now(shift_tz) - start_dt),
                                                                                                     "\n{0} file{1} renamed due to filename case changes".format(change_tracker.num_changes(ChangeTypes.CH_TYPE_RENAME),
                                                                                                                                                                 "s" if change_tracker.num_changes(ChangeTypes.CH_TYPE_RENAME) != 1 else "") if change_tracker.has_changes(ChangeTypes.CH_TYPE_RENAME) else ""))
-    if not args.nologs and (sum(x.num_changes for x in change_tracker.typetrackers.values()) + change_tracker.num_errors) > 0:
+    if not launch_args.args.nologs and (sum(x.num_changes for x in change_tracker.typetrackers.values()) + change_tracker.num_errors) > 0:
         change_tracker.add_log("Writing Logs")
         if not os.path.exists("bkpLogs"):
             os.mkdir("bkpLogs")
@@ -1304,29 +1339,56 @@ def start_menu():
     if change_tracker.num_errors > 0:
         print(f"{ANSIEscape.get_colored_text(f'Encountered {change_tracker.num_errors} errors.', text_color=ANSIEscape.ForegroundTextColor.yellow)}")
         time.sleep(2)
-        if args.nologs:
+        if launch_args.args.nologs:
             print("\n".join(change_tracker.errors))
         else:
             ulp = os.path.join("bkpLogs", str(start_dt.date()))
             os.system("start " + os.path.join(ulp, 'errors.log').replace('\\', '/'))
-    if not args.nopause:
+    if not launch_args.args.nopause:
         os.system("pause")
-    sys.exit()
 
 
 if __name__ == "__main__":
     ANSIEscape.ansi_escape_ready()
+    ap = argparse.ArgumentParser()
+    ap.add_argument("-O", "--offline", help="Run in guaranteed offline mode, prevents version checks", action="store_true")
+    ap.add_argument("-no", "--nooutput", help="disable interface updates", action="store_true")
+    ap.add_argument("-np", "--nopause", help="disable user input requirement", action="store_true")
+    ap.add_argument("-nl", "--nologs", help="disable log creation", action="store_true")
+    ap.add_argument("-ncl", "--nochangelist", help="disable showing a list of changes before copying", action="store_true")
+    ap.add_argument("-prof", "--profile", help="run with a profiler active, display the results in the end", action="store_true")
+    args = ap.parse_args()
+    launch_args.update_args(args)
     try:
-        start_menu()
+        if launch_args.args.profile:
+            import cProfile
+            with cProfile.Profile() as profiler:
+                start_menu()
+            if not launch_args.args.nologs:
+                if not os.path.exists("bkpLogs"):
+                    os.mkdir("bkpLogs")
+                ulp = os.path.join("bkpLogs", str(datetime.datetime.now().date()))
+                if not os.path.exists(ulp):
+                    os.mkdir(ulp)
+                with open(os.path.join(ulp, "profiler_output.log"), "a", encoding="utf-8") as ul:
+                    import pstats
+                    s = io.StringIO()
+                    pstats.Stats(profiler, stream=s).strip_dirs().sort_stats("cumtime").print_stats()
+                    ul.write(s.getvalue())
+                os.system("start " + os.path.join(ulp, 'profiler_output.log').replace('\\', '/'))
+        else:
+            start_menu()
     except Exception as e:
         if finished_init is False:
             print("Exception Occured while Launching: {0} : {1}".format(type(e).__name__, e.args))
             print('Press any key to try redownloading the script.')
-            os.system('pause >nul')
+            if not launch_args.args.nopause:
+                os.system('pause >nul')
             dl_update()
         else:
             import traceback
             print("Exception Occured: {0} : {1}".format(type(e).__name__, e.args))
             print("\n".join(traceback.format_tb(e.__traceback__)))
-            os.system("pause")
+            if not launch_args.args.nopause:
+                os.system("pause")
             raise e
