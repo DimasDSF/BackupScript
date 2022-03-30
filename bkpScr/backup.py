@@ -181,8 +181,8 @@ class ANSIEscape(object):
                 kernel32 = ctypes.windll.kernel32
                 outhandle = kernel32.GetStdHandle(-11)
                 kernel32.SetConsoleMode(outhandle, 7)
-            except WindowsError as e:
-                if e.winerror == 0x0057:  # ERROR_INVALID_PARAMETER
+            except WindowsError as err:
+                if err.winerror == 0x0057:  # ERROR_INVALID_PARAMETER
                     raise NotImplementedError
                 raise
         elif os.name == 'posix':
@@ -349,7 +349,6 @@ class ANSIEscape(object):
         if text_color is None and background_color is None:
             return text
         return f"{ANSIEscape.get_graphics_mode_changer(foreground_color=text_color, background_color=background_color)}{text}{ANSIEscape.get_graphics_mode_reset_char(text=True, background=True)}"
-
 
     @staticmethod
     def set_drawing_mode(enable: bool):
@@ -604,13 +603,13 @@ class ModTimestampDB(object):
         _ts = self.data.get(filepath.replace("\\", "/"), None)
         if _ts is None:
             _ts = os.stat(filepath).st_mtime
-            self.save_timestamp(filepath, _ts)
+            self.save_timestamp(filepath, _ts, force=True)
         return _ts
 
-    def save_timestamp(self, filepath: str, timestamp: float = None):
+    def save_timestamp(self, filepath: str, timestamp: float = None, *, force: bool = False):
         if timestamp is None:
             timestamp = os.stat(filepath).st_mtime
-        if abs(self.data.get(filepath.replace("\\", "/"), 0) - timestamp) > MAX_MODIFICATION_TIME_ERROR_OFFSET:
+        if abs(self.data.get(filepath.replace("\\", "/"), 0) - timestamp) > MAX_MODIFICATION_TIME_ERROR_OFFSET or force:
             self.data[filepath.replace("\\", "/")] = timestamp
             self.unsaved_changes += 1
             if self.unsaved_changes > 10 and self.autosave:
