@@ -1,4 +1,5 @@
 import datetime
+import io
 import os
 import sys
 import time
@@ -1363,11 +1364,20 @@ if __name__ == "__main__":
             import cProfile
             with cProfile.Profile() as profiler:
                 start_menu()
-            print(profiler.print_stats(sort="cumtime"))
+            if not launch_args.args.nologs:
+                if not os.path.exists("bkpLogs"):
+                    os.mkdir("bkpLogs")
+                ulp = os.path.join("bkpLogs", str(datetime.datetime.now().date()))
+                if not os.path.exists(ulp):
+                    os.mkdir(ulp)
+                with open(os.path.join(ulp, "profiler_output.log"), "a", encoding="utf-8") as ul:
+                    import pstats
+                    s = io.StringIO()
+                    pstats.Stats(profiler, stream=s).strip_dirs().sort_stats("cumtime").print_stats()
+                    ul.write(s.getvalue())
+                os.system("start " + os.path.join(ulp, 'profiler_output.log').replace('\\', '/'))
         else:
             start_menu()
-        if not launch_args.args.nopause:
-            os.system("pause")
     except Exception as e:
         if finished_init is False:
             print("Exception Occured while Launching: {0} : {1}".format(type(e).__name__, e.args))
