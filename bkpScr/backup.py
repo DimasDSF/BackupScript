@@ -1195,7 +1195,6 @@ def process():
         print("{0}/{0}. 0 Required Changes Indexed.".format(len(allbkps)))
         print("No Changes Found. Exiting")
         time.sleep(2)
-        sys.exit(0)
 
 
 finished_init = False
