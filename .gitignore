@@ -1,6 +1,7 @@
 BkpScr/__pycache__/
 .idea/
 BkpScr/config.json
+BkpScr/db/*
 *.bat
 bkp/*
 bkpLogs/*

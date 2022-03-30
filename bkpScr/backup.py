@@ -586,6 +586,49 @@ def _copyfileobj_readinto_w_cb(fsrc, fdst, length=shutil.COPY_BUFSIZE, *, callba
 
 #####################################################
 
+class ModTimestampDB(object):
+    def __init__(self, storage_path: str = "db/timestamps.json", *, autosave: bool = False):
+        self.storage_rel_path = storage_path
+        self.data = dict()
+        self.load()
+        self.unsaved_changes = 0
+        self.autosave = autosave
+
+    @property
+    def storage(self):
+        return os.path.join(os.path.dirname(os.path.realpath(__file__)), self.storage_rel_path)
+
+    def get_timestamp(self, filepath: str):
+        if not os.path.exists(filepath):
+            return 0
+        _ts = self.data.get(filepath.replace("\\", "/"), None)
+        if _ts is None:
+            _ts = os.stat(filepath).st_mtime
+            self.save_timestamp(filepath, _ts)
+        return _ts
+
+    def save_timestamp(self, filepath: str, timestamp: float = None):
+        if timestamp is None:
+            timestamp = os.stat(filepath).st_mtime
+        if abs(self.data.get(filepath.replace("\\", "/"), 0) - timestamp) > MAX_MODIFICATION_TIME_ERROR_OFFSET:
+            self.data[filepath.replace("\\", "/")] = timestamp
+            self.unsaved_changes += 1
+            if self.unsaved_changes > 10 and self.autosave:
+                self.save()
+
+    def load(self):
+        if not os.path.exists(self.storage):
+            self.save()
+        with open(self.storage, "r", encoding='utf-8') as f:
+            self.data = json.load(f)
+
+    def save(self):
+        if not os.path.exists(os.path.dirname(self.storage)):
+            os.makedirs(os.path.dirname(self.storage), exist_ok=True)
+        with open(self.storage, "w+", encoding='utf-8') as f:
+            json.dump(self.data, f, indent=4)
+        self.unsaved_changes = 0
+
 class FileChange(object):
     def __init__(self, change_type: str, change_text: str):
         self.change_type = change_type
@@ -831,6 +874,7 @@ class InstructionStorage(object):
 
 change_tracker = ChangeTracker()
 file_instruction_list = InstructionStorage()
+modification_timestamp_db = ModTimestampDB()
 
 def del_file_or_dir(path):
     try:
@@ -981,7 +1025,7 @@ def process():
                 # Source Dir Exists
                 if os.path.isfile(sd):
                     if os.path.exists(fp):
-                        if os.stat(sd).st_mtime > os.stat(fp).st_mtime + MAX_MODIFICATION_TIME_ERROR_OFFSET or b.get('force_backup', False):
+                        if os.stat(sd).st_mtime > modification_timestamp_db.get_timestamp(fp) + MAX_MODIFICATION_TIME_ERROR_OFFSET or b.get('force_backup', False):
                             file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_UPDATE, sd, fp)
                     else:
                         file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_CREATE, sd, fp)
@@ -993,7 +1037,7 @@ def process():
                             if not launch_args.args.nooutput:
                                 file_instruction_list.print_scan_status("Checking Files for changes:", sd, n, num_bkps, cur_file=f.path)
                             if os.path.exists(fp):
-                                if os.stat(f.path).st_mtime > os.stat(fp).st_mtime + MAX_MODIFICATION_TIME_ERROR_OFFSET or b.get('force_backup', False):
+                                if os.stat(f.path).st_mtime > modification_timestamp_db.get_timestamp(fp) + MAX_MODIFICATION_TIME_ERROR_OFFSET or b.get('force_backup', False):
                                     file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_UPDATE, f.path, fp)
                             else:
                                 file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_CREATE, f.path, fp)
@@ -1110,6 +1154,7 @@ def process():
                 if _cur_file.change_type == ChangeTypes.CH_TYPE_UPDATE:
                     act_filepath = get_actual_filepath(_cur_file.target)
                     copy_with_callback(_cur_file.source, os.path.dirname(act_filepath), callback=partial(print_cur_status, _cur_file.diffsize))  # noqa
+                    modification_timestamp_db.save_timestamp(act_filepath)
                     bytes_done += _cur_file.diffsize
                     change_tracker.add_file_change(ChangeTypes.CH_TYPE_UPDATE, "Updated | {0} | {1} -> {2}".format(_cur_file.source,
                                                                                                  get_modification_dt_from_file(_cur_file.source),
@@ -1122,6 +1167,7 @@ def process():
                                                                                                      os.path.basename(_cur_file.source)))
                 elif _cur_file.change_type == ChangeTypes.CH_TYPE_CREATE:
                     copy_with_callback(_cur_file.source, os.path.dirname(_cur_file.target), callback=partial(print_cur_status, _cur_file.diffsize))  # noqa
+                    modification_timestamp_db.save_timestamp(_cur_file.target)
                     bytes_done += _cur_file.diffsize
                     change_tracker.add_file_change(ChangeTypes.CH_TYPE_CREATE, "Created | {0}".format(_cur_file.source), should_print=False)
                 elif _cur_file.change_type == ChangeTypes.CH_TYPE_REMOVE or _cur_file.change_type == ChangeTypes.CH_TYPE_REMOVEFOLDER:
@@ -1135,6 +1181,8 @@ def process():
                 current_file_num += 1
         file_instruction_list.invalidate_cache()
         clear_terminal()
+        if modification_timestamp_db.unsaved_changes > 0:
+            modification_timestamp_db.save()
         print("Finished Copying.")
         ANSIEscape.set_cursor_display(True)
         print("{0} / {1}({2}%) done.\n{3}{4}".format(num_files - file_change_errors,
@@ -1171,7 +1219,7 @@ def start_menu():
             if len(modes) > 0:
                 modes += "\n"
             modes += "{0} mode enabled".format(a)
-    print("Automated Backup Script.{2}\nVersion:{0}/{1}\nPress any key to proceed\nClose the app to cancel.".format(version.get('version', "Unavailable"), version.get('coderev', "Unavailable"), "\n{}".format(modes) if len(modes) > 0 else ""))
+    print("Automated Backup Script.{2}\nVersion:{0}/{1}\nTimestamp DB entries: {3}\nPress any key to proceed\nClose the app to cancel.".format(version.get('version', "Unavailable"), version.get('coderev', "Unavailable"), "\n{}".format(modes) if len(modes) > 0 else "", len(modification_timestamp_db.data)))
     if not args.offline:
         lvd = is_latest_version()
         if lvd is None:
