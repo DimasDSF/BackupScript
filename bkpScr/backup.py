@@ -982,17 +982,27 @@ def is_in_ignored(path: str, ignored_paths: Set[Optional[str]]):
             return True
     return False
 
-def scan_directory(sdir: str, ignored_paths: Set[Optional[str]] = ()) -> Union[Dict[str, os.DirEntry], os.DirEntry]:
+def scan_directory(sdir: str, ignored_paths: Set[Optional[str]] = (), *, filenum: int = None,  print_progress: bool = False) -> Union[Dict[str, os.DirEntry], os.DirEntry]:
     ret = dict()
     if os.path.exists(sdir):
         try:
+            if print_progress:
+                ANSIEscape.set_cursor_pos(1, 1)
+                print(f"Scanning {sdir}:{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}")
+                if filenum is None:
+                    filenum = [0]
             for f in os.scandir(sdir):
                 f: os.DirEntry
                 if not is_in_ignored(f.path, ignored_paths):
                     if f.is_file():
                         ret[f.name] = f
+                        if print_progress:
+                            filenum[0] = filenum[0] + 1
                     elif f.is_dir():
-                        ret[f.name] = scan_directory(f.path, ignored_paths=ignored_paths)
+                        ret[f.name] = scan_directory(f.path, ignored_paths=ignored_paths, filenum=filenum, print_progress=print_progress)
+                    if print_progress:
+                        ANSIEscape.set_cursor_pos(1, 3)
+                        print(f"{filenum[0]} Files found.{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}")
         except NotADirectoryError:
             ret = os.stat(sdir)  # noqa
     return ret
@@ -1065,9 +1075,10 @@ def process():
     if not launch_args.args.nooutput:
         clear_terminal()
     ANSIEscape.set_cursor_display(False)
-    print("Compiling pathlists...", end="")
-    bkpscan = scan_directory(bkp_root)
-    print(" Done.")
+    print("Compiling pathlists...")
+    bkpscan = scan_directory(bkp_root, print_progress=True)
+    print("Done.")
+    time.sleep(2)
     for n, b in enumerate(allbkps):
         sd = os.path.normpath(b['path'])
         ignored_paths_var = b.get("ignored_paths", ())
