@@ -1181,8 +1181,6 @@ def process():
                 current_file_num += 1
         file_instruction_list.invalidate_cache()
         clear_terminal()
-        if modification_timestamp_db.unsaved_changes > 0:
-            modification_timestamp_db.save()
         print("Finished Copying.")
         ANSIEscape.set_cursor_display(True)
         print("{0} / {1}({2}%) done.\n{3}{4}".format(num_files - file_change_errors,
@@ -1303,6 +1301,8 @@ def start_menu():
             with open(os.path.join(ulp, "errors.log"), "a", encoding="utf-8") as ul:
                 ul.writelines(change_tracker.errors)
     print("Done.")
+    if modification_timestamp_db.unsaved_changes > 0:
+        modification_timestamp_db.save()
     if change_tracker.num_errors > 0:
         print(f"{ANSIEscape.get_colored_text(f'Encountered {change_tracker.num_errors} errors.', text_color=ANSIEscape.ForegroundTextColor.yellow)}")
         time.sleep(2)
