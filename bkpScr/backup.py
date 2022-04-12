@@ -1002,10 +1002,7 @@ def scan_directory(sdir: str, ignored_paths: Set[Optional[str]] = (), *, filenum
                             filenum[0] = filenum[0] + 1
                     elif f.is_dir():
                         _contents = scan_directory(f.path, ignored_paths=ignored_paths, filenum=filenum, print_progress=print_progress)
-                        if len(_contents) > 0:
-                            ret[f.name] = _contents
-                        else:
-                            ret[f.name] = f
+                        ret[f.name] = f if len(_contents) == 0 else _contents
                     if print_progress:
                         ANSIEscape.set_cursor_pos(1, 3)
                         print(f"{filenum[0]} Files found.{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}")
@@ -1138,8 +1135,8 @@ def process():
                     change_tracker.add_error("{} Backup Source is Unavailable.".format(sd), wait_time=1)
             if mode in ("snapshot", "sync"):
                 for bkpf in bkp_rec_scan:
-                    rsflunod = os.path.splitdrive(bkpf.path)[1].replace("\\", "/")[len(bkp_root) + len(bkpsubpath) + 1:]
-                    sf = rsflunod[rsflunod.find(sd.split("\\")[-1])+len(sd.split("\\")[-1])+1:].replace("\\", "/")
+                    rsflunod = os.path.splitdrive(bkpf.path)[1].replace("\\", "/")[len(bkp_root) + len(bkpsubpath):]
+                    sf = get_src_path(sd, rsflunod)[len(sd):].replace("\\", "/")
                     sfile: Optional[os.DirEntry] = deep_get(reverse_source_scan, sf[1 if sf.startswith("/") else None:].split("/"), return_none=True)
                     if sfile is not None:
                         if mode == "sync":
@@ -1179,7 +1176,7 @@ def process():
             ANSIEscape.set_cursor_display(True)
             _changesnum = len(file_instruction_list.filechanges)
             for change in file_instruction_list.filechanges:
-                _text = f"[{ANSIEscape.get_colored_text(change.change_type.capitalize(), text_color=ANSIEscape.ForegroundTextColor.red if change.change_type in (ChangeTypes.CH_TYPE_REMOVE, ChangeTypes.CH_TYPE_REMOVEFOLDER) else ANSIEscape.ForegroundTextColor.green if change.change_type in (ChangeTypes.CH_TYPE_CREATE, ChangeTypes.CH_TYPE_FOLDER) else ANSIEscape.ForegroundTextColor.bright_green if change.change_type in (ChangeTypes.CH_TYPE_UPDATE, ChangeTypes.CH_TYPE_SYNC_SRC_BKP, ChangeTypes.CH_TYPE_SYNC_BKP_SRC) else None)}]\n{change.source}\n  <{format_bytes(change.sourcesize)}>mod@{notzformat.format(datetime.datetime.fromtimestamp(change.sourcemtime))}({change.sourcemtime})\n  ~{format_bytes(change.diffspace)}~\n{change.target}"
+                _text = f"[{ANSIEscape.get_colored_text(change.change_type.capitalize(), text_color=ANSIEscape.ForegroundTextColor.red if change.change_type == ChangeTypes.CH_TYPE_REMOVE else ANSIEscape.ForegroundTextColor.green if change.change_type in (ChangeTypes.CH_TYPE_CREATE, ChangeTypes.CH_TYPE_FOLDER) else ANSIEscape.ForegroundTextColor.bright_green if change.change_type in (ChangeTypes.CH_TYPE_UPDATE, ChangeTypes.CH_TYPE_SYNC_SRC_BKP, ChangeTypes.CH_TYPE_SYNC_BKP_SRC) else None)}]\n{change.source}\n  <{format_bytes(change.sourcesize)}>mod@{notzformat.format(datetime.datetime.fromtimestamp(change.sourcemtime))}({change.sourcemtime})\n  ~{format_bytes(change.diffspace)}~\n{change.target}"
                 if change.change_type == ChangeTypes.CH_TYPE_UPDATE:
                     _text += f"\n  <{format_bytes(change.targetsize)}>mod@{notzformat.format(datetime.datetime.fromtimestamp(change.targetmtime))}({change.targetmtime})"
                 print(_text, flush=True)
@@ -1231,7 +1228,7 @@ def process():
                     except FileExistsError:
                         pass
                     else:
-                        change_tracker.add_file_change(ChangeTypes.CH_TYPE_FOLDER, "Created folder {0}".format(os.path.dirname(_cur_file.target)), should_print=False)
+                        change_tracker.add_file_change('folder', "Created folder {0}".format(os.path.dirname(_cur_file.target)), should_print=False)
             try:
                 if not launch_args.args.nooutput:
                     print_status()
