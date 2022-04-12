@@ -683,10 +683,8 @@ class ChangeTypes(object):
     CH_TYPE_RENAME = 'rename'
     CH_TYPE_REMOVE = 'remove'
     CH_TYPE_CREATE = 'create'
-    CH_TYPE_FOLDER = 'create_folder'
-    CH_TYPE_REMOVEFOLDER = 'remove_folder'
-    CH_TYPE_SYNC_BKP_SRC = "sync_bkp_to_src"
-    CH_TYPE_SYNC_SRC_BKP = "sync_src_to_bkp"
+    CH_TYPE_FOLDER = 'folder'
+    CH_TYPE_REMOVEFOLDER = 'removef'
 
     @staticmethod
     def all_types() -> List[str]:
@@ -1001,8 +999,7 @@ def scan_directory(sdir: str, ignored_paths: Set[Optional[str]] = (), *, filenum
                         if print_progress:
                             filenum[0] = filenum[0] + 1
                     elif f.is_dir():
-                        _contents = scan_directory(f.path, ignored_paths=ignored_paths, filenum=filenum, print_progress=print_progress)
-                        ret[f.name] = f if len(_contents) == 0 else _contents
+                        ret[f.name] = scan_directory(f.path, ignored_paths=ignored_paths, filenum=filenum, print_progress=print_progress)
                     if print_progress:
                         ANSIEscape.set_cursor_pos(1, 3)
                         print(f"{filenum[0]} Files found.{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}")
@@ -1010,9 +1007,9 @@ def scan_directory(sdir: str, ignored_paths: Set[Optional[str]] = (), *, filenum
             ret = os.stat(sdir)  # noqa
     return ret
 
-def recursive_fileiter(sdir, ignored_paths: Set[Optional[str]] = (), include_empty_folders: bool = False):
+def recursive_fileiter(sdir, ignored_paths: Set[Optional[str]] = ()):
     ret = list()
-    folders: List[os.DirEntry] = list()
+    folders = list()
     if os.path.exists(sdir):
         if os.path.isfile(sdir):
             for x in os.scandir(os.path.dirname(sdir)):
@@ -1023,15 +1020,12 @@ def recursive_fileiter(sdir, ignored_paths: Set[Optional[str]] = (), include_emp
             f: os.DirEntry
             try:
                 if f.is_dir():
-                    folders.append(f)
+                    folders.append(f.path)
             except FileNotFoundError as _e:
                 if os.path.islink(_e.filename) or Path(_e.filename).is_symlink():
                     change_tracker.add_error(f"Folder {_e.filename} was found but it apparently is a {'sym' if Path(_e.filename).is_symlink() else ''}link that cannot be reached. {_e.__class__.__name__}: {_e.args}")
         for folder in folders:
-            _contents = recursive_fileiter(folder.path, ignored_paths, include_empty_folders)
-            if len(_contents) == 0 and include_empty_folders:
-                ret.append(folder)
-            ret.extend(_contents)
+            ret.extend(recursive_fileiter(folder, ignored_paths))
         if os.path.isfile(sdir) and not is_in_ignored(sdir, ignored_paths):
             ret.append(sdir)
         for item in os.scandir(sdir):
@@ -1068,7 +1062,6 @@ def get_actual_filepath(p: str):
 def get_actual_filename(p: str):
     return Path(p).resolve().name
 
-
 def process():
     clear_terminal()
     print("Initializing.")
@@ -1088,69 +1081,42 @@ def process():
     time.sleep(2)
     for n, b in enumerate(allbkps):
         sd = os.path.normpath(b['path'])
-        bkpsubpath = b.get("bkpsubpath", "")
-        mode = b.get("mode", "default")
         ignored_paths_var = b.get("ignored_paths", ())
         ignored_paths = {f"{os.path.join(sd, x)}" for x in ignored_paths_var}
         try:
             if not launch_args.args.nooutput:
                 file_instruction_list.print_scan_status("Checking Files for changes:", sd, n, num_bkps)
             p = os.path.splitdrive(sd)[1]
-            fp = os.path.join(bkp_root, bkpsubpath, get_bkp_path(p[1:] if p.startswith(("\\", "/")) else p))
-            if mode in ("snapshot", "sync") and os.path.exists(fp):
-                _back_ignored_paths = {f"{os.path.join(fp, x)}" for x in ignored_paths_var}
-                bkp_rec_scan: List[os.DirEntry] = recursive_fileiter(fp, ignored_paths, True)
-                reverse_source_scan: Union[Dict[str, os.DirEntry], os.DirEntry] = scan_directory(sd, ignored_paths)
-            else:
-                bkp_rec_scan = []
-                reverse_source_scan = dict()
+            fp = os.path.join(bkp_root, get_bkp_path(p[1:] if p.startswith(("\\", "/")) else p))
             if os.path.exists(sd):
-                sourcescan = recursive_fileiter(sd, ignored_paths, True)
+                sourcescan = recursive_fileiter(sd, ignored_paths)
                 for f in sourcescan:
                     fspldrv = os.path.splitdrive(f.path)[1]
-                    filep = os.path.join(bkp_root, bkpsubpath, get_bkp_path(fspldrv[1:] if fspldrv.startswith(("\\", "/")) else fspldrv))
+                    filep = os.path.join(bkp_root, get_bkp_path(fspldrv[1:] if fspldrv.startswith(("\\", "/")) else fspldrv))
                     file: Optional[os.DirEntry] = deep_get(bkpscan, filep.split("\\")[1:], return_none=True)
                     if not launch_args.args.nooutput:
                         file_instruction_list.print_scan_status("Checking Files for changes:", sd, n, num_bkps, cur_file=f.path)
-                    if mode == "sync":
-                        if file is not None:
-                            if f.is_file():
-                                if f.stat().st_mtime > modification_timestamp_db.get_timestamp(file) + MAX_MODIFICATION_TIME_ERROR_OFFSET:
-                                    file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_SYNC_SRC_BKP, f.path, filep)
-                                elif f.stat().st_mtime + MAX_MODIFICATION_TIME_ERROR_OFFSET < modification_timestamp_db.get_timestamp(file):
-                                    file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_SYNC_BKP_SRC, filep, f.path)
-                        else:
-                            file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_CREATE if f.is_file() else ChangeTypes.CH_TYPE_FOLDER, f.path, filep)
+                    if file is not None:
+                        if f.stat().st_mtime > modification_timestamp_db.get_timestamp(file) + MAX_MODIFICATION_TIME_ERROR_OFFSET or b.get('force_backup', False):
+                            file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_UPDATE, f.path, filep)
                     else:
-                        if file is not None:
-                            if f.stat().st_mtime > modification_timestamp_db.get_timestamp(file) + MAX_MODIFICATION_TIME_ERROR_OFFSET or b.get('force_backup', False):
-                                file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_UPDATE, f.path, filep)
-                        else:
-                            file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_CREATE if f.is_file() else ChangeTypes.CH_TYPE_FOLDER, f.path, filep)
+                        file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_CREATE, f.path, filep)
+                if b.get('snapshot_mode', False) and os.path.exists(fp):
+                    _back_ignored_paths = {f"{os.path.join(fp, x)}" for x in ignored_paths_var}
+                    bkp_rec_scan: List[os.DirEntry] = recursive_fileiter(fp, ignored_paths)
+                    reverse_source_scan: Union[Dict[str, os.DirEntry], os.DirEntry] = scan_directory(sd, ignored_paths)
+                    for bkpf in bkp_rec_scan:
+                        rsflunod = os.path.splitdrive(bkpf.path)[1].replace("\\", "/")[len(bkp_root):]
+                        sf = get_src_path(sd, rsflunod)[len(sd):].replace("\\", "/")
+                        sfile: Optional[os.DirEntry] = deep_get(reverse_source_scan, sf[1 if sf.startswith("/") else None:].split("/"), return_none=True)
+                        if sfile is None:
+                            file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_REMOVE if os.path.isfile(bkpf.path) else ChangeTypes.CH_TYPE_REMOVEFOLDER, bkpf.path)
             else:
-                if mode == "snapshot":
+                if b.get('snapshot_mode', False):
                     if os.path.exists(fp):
                         file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_REMOVE if os.path.isfile(fp) else ChangeTypes.CH_TYPE_REMOVEFOLDER, fp)
                 else:
                     change_tracker.add_error("{} Backup Source is Unavailable.".format(sd), wait_time=1)
-            if mode in ("snapshot", "sync"):
-                for bkpf in bkp_rec_scan:
-                    rsflunod = os.path.splitdrive(bkpf.path)[1].replace("\\", "/")[len(bkp_root) + len(bkpsubpath):]
-                    sf = get_src_path(sd, rsflunod)[len(sd):].replace("\\", "/")
-                    sfile: Optional[os.DirEntry] = deep_get(reverse_source_scan, sf[1 if sf.startswith("/") else None:].split("/"), return_none=True)
-                    if sfile is not None:
-                        if mode == "sync":
-                            if bkpf.is_file():
-                                if sfile.stat().st_mtime > bkpf.stat().st_mtime + MAX_MODIFICATION_TIME_ERROR_OFFSET:
-                                    file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_SYNC_SRC_BKP if sfile.is_file() else ChangeTypes.CH_TYPE_FOLDER, sfile.path, bkpf.path)
-                                elif sfile.stat().st_mtime + MAX_MODIFICATION_TIME_ERROR_OFFSET < bkpf.stat().st_mtime:
-                                    file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_SYNC_BKP_SRC if bkpf.is_file() else ChangeTypes.CH_TYPE_FOLDER, bkpf.path, sfile.path)
-                    else:
-                        if mode == "snapshot":
-                            if os.path.exists(fp):
-                                file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_REMOVE if os.path.isfile(bkpf.path) else ChangeTypes.CH_TYPE_REMOVEFOLDER, bkpf.path)
-                        else:
-                            file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_SYNC_BKP_SRC if bkpf.is_file() else ChangeTypes.CH_TYPE_FOLDER, bkpf.path, os.path.join(sd, sf[1 if sf.startswith("/") else None:]))
         except Exception as _e:
             change_tracker.add_error(f"Scanning File {sd} raised an exception: {_e.__traceback__.tb_lineno} | {_e.__class__.__name__}: {_e.args}")
     else:
@@ -1159,8 +1125,8 @@ def process():
     ANSIEscape.set_cursor_display(True)
     if file_instruction_list.changes_num > 0:
         _changetext = "{0} Changes Required. {1} Updates, {2} Creations, {3} Removals. {4} I/OAction Size".format(file_instruction_list.changes_num,
-                                                                                       len(list(filter(lambda x: x.change_type in (ChangeTypes.CH_TYPE_UPDATE, ChangeTypes.CH_TYPE_SYNC_BKP_SRC, ChangeTypes.CH_TYPE_SYNC_SRC_BKP), file_instruction_list.filechanges))),
-                                                                                       len(list(filter(lambda x: x.change_type in (ChangeTypes.CH_TYPE_CREATE, ChangeTypes.CH_TYPE_FOLDER), file_instruction_list.filechanges))),
+                                                                                       len(list(filter(lambda x: x.change_type == ChangeTypes.CH_TYPE_UPDATE, file_instruction_list.filechanges))),
+                                                                                       len(list(filter(lambda x: x.change_type == ChangeTypes.CH_TYPE_CREATE, file_instruction_list.filechanges))),
                                                                                        len(list(filter(lambda x: x.change_type == ChangeTypes.CH_TYPE_REMOVE, file_instruction_list.filechanges))) + len(list(filter(lambda x: x.change_type == ChangeTypes.CH_TYPE_REMOVEFOLDER, file_instruction_list.filechanges))),
                                                                                        format_bytes(file_instruction_list.bytes_to_modify))
         clear_terminal()
@@ -1176,7 +1142,7 @@ def process():
             ANSIEscape.set_cursor_display(True)
             _changesnum = len(file_instruction_list.filechanges)
             for change in file_instruction_list.filechanges:
-                _text = f"[{ANSIEscape.get_colored_text(change.change_type.capitalize(), text_color=ANSIEscape.ForegroundTextColor.red if change.change_type == ChangeTypes.CH_TYPE_REMOVE else ANSIEscape.ForegroundTextColor.green if change.change_type in (ChangeTypes.CH_TYPE_CREATE, ChangeTypes.CH_TYPE_FOLDER) else ANSIEscape.ForegroundTextColor.bright_green if change.change_type in (ChangeTypes.CH_TYPE_UPDATE, ChangeTypes.CH_TYPE_SYNC_SRC_BKP, ChangeTypes.CH_TYPE_SYNC_BKP_SRC) else None)}]\n{change.source}\n  <{format_bytes(change.sourcesize)}>mod@{notzformat.format(datetime.datetime.fromtimestamp(change.sourcemtime))}({change.sourcemtime})\n  ~{format_bytes(change.diffspace)}~\n{change.target}"
+                _text = f"[{ANSIEscape.get_colored_text(change.change_type, text_color=ANSIEscape.ForegroundTextColor.red if change.change_type == ChangeTypes.CH_TYPE_REMOVE else ANSIEscape.ForegroundTextColor.green if change.change_type == ChangeTypes.CH_TYPE_CREATE else ANSIEscape.ForegroundTextColor.bright_green if change.change_type == ChangeTypes.CH_TYPE_UPDATE else None)}]\n{change.source}\n  <{format_bytes(change.sourcesize)}>mod@{notzformat.format(datetime.datetime.fromtimestamp(change.sourcemtime))}({change.sourcemtime})\n  ~{format_bytes(change.diffspace)}~\n{change.target}"
                 if change.change_type == ChangeTypes.CH_TYPE_UPDATE:
                     _text += f"\n  <{format_bytes(change.targetsize)}>mod@{notzformat.format(datetime.datetime.fromtimestamp(change.targetmtime))}({change.targetmtime})"
                 print(_text, flush=True)
@@ -1252,29 +1218,11 @@ def process():
                         change_tracker.add_file_change('rename', "Renamed | {0} | {1} -> {2}".format(act_filepath,
                                                                                                      os.path.basename(act_filepath),
                                                                                                      os.path.basename(_cur_file.source)))
-                elif _cur_file.change_type in (ChangeTypes.CH_TYPE_SYNC_SRC_BKP, ChangeTypes.CH_TYPE_SYNC_BKP_SRC):
-                    act_filepath = get_actual_filepath(_cur_file.target)
-                    copy_with_callback(_cur_file.source, os.path.dirname(act_filepath), callback=partial(print_cur_status, _cur_file.diffsize))  # noqa
-                    if _cur_file.change_type == ChangeTypes.CH_TYPE_SYNC_SRC_BKP:
-                        modification_timestamp_db.save_timestamp(act_filepath)
-                    bytes_done += _cur_file.diffsize
-                    change_tracker.add_file_change(ChangeTypes.CH_TYPE_UPDATE, "Updated | {0} | {1} -> {2}".format(_cur_file.source,
-                                                                                       get_modification_dt_from_file(_cur_file.source),
-                                                                                       get_modification_dt_from_file(_cur_file.target)),
-                                                   should_print=False)
-                    if os.path.basename(act_filepath) != os.path.basename(_cur_file.source):
-                        os.rename(act_filepath, os.path.join(os.path.dirname(act_filepath), os.path.basename(_cur_file.source)))
-                        change_tracker.add_file_change('rename', "Renamed | {0} | {1} -> {2}".format(act_filepath,
-                                                                                                     os.path.basename(act_filepath),
-                                                                                                     os.path.basename(_cur_file.source)))
                 elif _cur_file.change_type == ChangeTypes.CH_TYPE_CREATE:
                     copy_with_callback(_cur_file.source, os.path.dirname(_cur_file.target), callback=partial(print_cur_status, _cur_file.diffsize))  # noqa
                     modification_timestamp_db.save_timestamp(_cur_file.target)
                     bytes_done += _cur_file.diffsize
                     change_tracker.add_file_change(ChangeTypes.CH_TYPE_CREATE, "Created | {0}".format(_cur_file.source), should_print=False)
-                elif _cur_file.change_type == ChangeTypes.CH_TYPE_FOLDER:
-                    os.makedirs(_cur_file.target, exist_ok=True)
-                    change_tracker.add_file_change(ChangeTypes.CH_TYPE_FOLDER, "Created Folder | {0}".format(_cur_file.source), should_print=False)
                 elif _cur_file.change_type == ChangeTypes.CH_TYPE_REMOVE or _cur_file.change_type == ChangeTypes.CH_TYPE_REMOVEFOLDER:
                     bytes_done += _cur_file.diffsize
                     del_file_or_dir(get_actual_filepath(_cur_file.source))
