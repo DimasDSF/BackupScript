@@ -631,7 +631,7 @@ def get_modification_time(path: str):
 class ModTimestampDB(object):
     def __init__(self, storage_path: str = "db/timestamps.json", *, autosave: bool = False):
         self.storage_rel_path = storage_path
-        self.data = dict()
+        self.data = dict(timestamp=0.0, files=dict())
         self.load()
         self.unsaved_changes = 0
         self.autosave = autosave
@@ -642,7 +642,7 @@ class ModTimestampDB(object):
 
     def get_timestamp(self, filepath: Union[str, os.DirEntry]):
         fp = filepath if isinstance(filepath, str) else filepath.path
-        _ts = self.data.get(fp.replace("\\", "/"), None)
+        _ts = self.data["files"].get(fp.replace("\\", "/"), None)
         if _ts is None:
             _ts = get_modification_time(filepath) if isinstance(filepath, str) else filepath.stat().st_mtime
             self.save_timestamp(fp, _ts, force=True)
@@ -651,11 +651,15 @@ class ModTimestampDB(object):
     def save_timestamp(self, filepath: str, timestamp: float = None, *, force: bool = False):
         if timestamp is None:
             timestamp = get_modification_time(filepath)
-        if abs(self.data.get(filepath.replace("\\", "/"), 0) - timestamp) > MAX_MODIFICATION_TIME_ERROR_OFFSET or force:
-            self.data[filepath.replace("\\", "/")] = timestamp
+        if abs(self.data["files"].get(filepath.replace("\\", "/"), 0) - timestamp) > MAX_MODIFICATION_TIME_ERROR_OFFSET or force:
+            self.data["files"][filepath.replace("\\", "/")] = timestamp
             self.unsaved_changes += 1
             if self.unsaved_changes > 10 and self.autosave:
                 self.save()
+
+    @property
+    def snapshot_ts(self):
+        return self.data.get('timestamp', 0)
 
     def load(self):
         if not os.path.exists(self.storage):
@@ -666,6 +670,7 @@ class ModTimestampDB(object):
     def save(self):
         if not os.path.exists(os.path.dirname(self.storage)):
             os.makedirs(os.path.dirname(self.storage), exist_ok=True)
+        self.data["timestamp"] = time.time()
         with open(self.storage, "w+", encoding='utf-8') as f:
             json.dump(self.data, f, indent=4)
         self.unsaved_changes = 0
@@ -983,7 +988,7 @@ def is_in_ignored(path: str, ignored_paths: Set[Optional[str]]):
             return True
     return False
 
-def scan_directory(sdir: str, ignored_paths: Set[Optional[str]] = (), *, filenum: int = None,  print_progress: bool = False) -> Union[Dict[str, os.DirEntry], os.DirEntry]:
+def scan_directory(sdir: str, ignored_paths: Set[Optional[str]] = (), *, filenum: List[int] = None,  print_progress: bool = False) -> Union[Dict[str, os.DirEntry], os.DirEntry]:
     ret = dict()
     if os.path.exists(sdir):
         try:
@@ -1005,8 +1010,27 @@ def scan_directory(sdir: str, ignored_paths: Set[Optional[str]] = (), *, filenum
                         ANSIEscape.set_cursor_pos(1, 3)
                         print(f"{filenum[0]} Files found.{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}")
         except NotADirectoryError:
-            ret = os.stat(sdir)  # noqa
+            ret = get_file_direntry(sdir)
     return ret
+
+def scan_backup_dirs(allbkps: list):
+    _scanresult: Dict[str, os.DirEntry] = dict()
+    filen = [0]
+    for b in allbkps:
+        sd = get_bkp_path(b.get('path'), b)
+        ignored_paths_var = b.get("ignored_paths", ())
+        ignored_paths = {f"{os.path.join(sd, x)}" for x in ignored_paths_var}
+        _scanresult[os.path.basename(sd)] = scan_directory(sd, ignored_paths, filenum=filen, print_progress=True)
+    return _scanresult
+
+
+def get_file_direntry(path: str):
+    if os.path.isdir(path):
+        raise TypeError("get_file_direntry should only be used on files, received a directory path")
+    try:
+        return list(x for x in os.scandir(os.path.dirname(path)))[0]
+    except:
+        return None
 
 def recursive_fileiter(sdir, ignored_paths: Set[Optional[str]] = ()):
     ret = list()
@@ -1063,7 +1087,7 @@ def get_actual_filepath(p: str):
 def get_actual_filename(p: str):
     return Path(p).resolve().name
 
-def scan_changes(allbkps):
+def scan_changes(allbkps: list):
     if launch_args.args.nooutput:
         print("Checking Files for changes | No Output Mode.")
     num_bkps = len(allbkps)
@@ -1071,7 +1095,7 @@ def scan_changes(allbkps):
         clear_terminal()
     ANSIEscape.set_cursor_display(False)
     print("Compiling pathlists...")
-    bkpscan = scan_directory(bkp_root, print_progress=True)
+    bkpscan = scan_backup_dirs(allbkps)
     print("Done.")
     time.sleep(2)
     for n, b in enumerate(allbkps):
@@ -1087,7 +1111,9 @@ def scan_changes(allbkps):
                 sourcescan = recursive_fileiter(sd, ignored_paths)
                 for f in sourcescan:
                     filep: str = get_bkp_path(f.path.replace("\\", "/"), b)
-                    file: Optional[os.DirEntry] = deep_get(bkpscan, filep.split("/")[1:], return_none=True)
+                    fp_dir = os.path.dirname(fp).replace("\\", "/")
+                    scan_filep = filep[len(fp_dir) if filep.startswith(fp_dir) else None:]
+                    file: Optional[os.DirEntry] = deep_get(bkpscan, scan_filep.split("/")[1:], return_none=True)
                     if not launch_args.args.nooutput:
                         file_instruction_list.print_scan_status("Checking Files for changes:", sd, n, num_bkps, cur_file=f.path)
                     if mode == ManageModes.M_MODE_SYNC:
@@ -1113,8 +1139,7 @@ def scan_changes(allbkps):
                 else:
                     change_tracker.add_error("{} Backup Source is Unavailable.".format(sd), wait_time=1)
             if mode in (ManageModes.M_MODE_SNAPSHOT, ManageModes.M_MODE_SYNC) and os.path.exists(fp):
-                escaped_backslash = '\\'
-                _back_ignored_paths = {f"{os.path.join(fp, x).replace(escaped_backslash, '/')}" for x in ignored_paths_var}
+                _back_ignored_paths = {os.path.join(fp, x).replace('\\', '/') for x in ignored_paths_var}
                 bkp_rec_scan: List[os.DirEntry] = recursive_fileiter(fp, _back_ignored_paths)
                 if os.path.exists(sd):
                     reverse_source_scan: Union[Dict[str, os.DirEntry], os.DirEntry] = scan_directory(sd, ignored_paths)
