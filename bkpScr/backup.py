@@ -631,10 +631,14 @@ def get_modification_time(path: str):
 class ModTimestampDB(object):
     def __init__(self, storage_path: str = "db/timestamps.json", *, autosave: bool = False):
         self.storage_rel_path = storage_path
-        self.data = dict(timestamp=0.0, files=dict())
+        self.__data = dict(timestamp=0.0, files=dict())
         self.load()
         self.unsaved_changes = 0
         self.autosave = autosave
+
+    @property
+    def data(self):
+        return self.__data.get('files')
 
     @property
     def storage(self):
@@ -642,7 +646,7 @@ class ModTimestampDB(object):
 
     def get_timestamp(self, filepath: Union[str, os.DirEntry]):
         fp = filepath if isinstance(filepath, str) else filepath.path
-        _ts = self.data["files"].get(fp.replace("\\", "/"), None)
+        _ts = self.data.get(fp.replace("\\", "/"), None)
         if _ts is None:
             _ts = get_modification_time(filepath) if isinstance(filepath, str) else filepath.stat().st_mtime
             self.save_timestamp(fp, _ts, force=True)
@@ -651,28 +655,32 @@ class ModTimestampDB(object):
     def save_timestamp(self, filepath: str, timestamp: float = None, *, force: bool = False):
         if timestamp is None:
             timestamp = get_modification_time(filepath)
-        if abs(self.data["files"].get(filepath.replace("\\", "/"), 0) - timestamp) > MAX_MODIFICATION_TIME_ERROR_OFFSET or force:
-            self.data["files"][filepath.replace("\\", "/")] = timestamp
+        if abs(self.data.get(filepath.replace("\\", "/"), 0) - timestamp) > MAX_MODIFICATION_TIME_ERROR_OFFSET or force:
+            self.data[filepath.replace("\\", "/")] = timestamp
+            self.__data["timestamp"] = time.time()
             self.unsaved_changes += 1
             if self.unsaved_changes > 10 and self.autosave:
                 self.save()
 
     @property
     def snapshot_ts(self):
-        return self.data.get('timestamp', 0)
+        return self.__data.get('timestamp', 0)
+
+    @snapshot_ts.setter
+    def snapshot_ts(self, value: float):
+        self.__data['timestamp'] = value
 
     def load(self):
         if not os.path.exists(self.storage):
             self.save()
         with open(self.storage, "r", encoding='utf-8') as f:
-            self.data = json.load(f)
+            self.__data = json.load(f)
 
     def save(self):
         if not os.path.exists(os.path.dirname(self.storage)):
             os.makedirs(os.path.dirname(self.storage), exist_ok=True)
-        self.data["timestamp"] = time.time()
         with open(self.storage, "w+", encoding='utf-8') as f:
-            json.dump(self.data, f, indent=4)
+            json.dump(self.__data, f, indent=4)
         self.unsaved_changes = 0
 
 class FileChange(object):
@@ -787,12 +795,13 @@ class ChangeTracker(object):
                 time.sleep(wait_time)
 
 class FileChangeInstruction(object):
-    def __init__(self, change_type: str, sourcefiledir: str, targetfilepath: str = None):
+    def __init__(self, change_type: str, sourcefiledir: str, targetfilepath: str = None, *, is_forced: bool = False):
         if change_type not in ChangeTypes.all_types():
             raise TypeError(f"Change Type {change_type} is not a correct change type.")
         self.change_type = change_type
         self.source = sourcefiledir
         self.target = targetfilepath
+        self.is_forced = is_forced
 
     @property
     def diffspace(self):
@@ -843,7 +852,7 @@ class FileChangeInstruction(object):
         return other.__hash__() == self.__hash__()
 
     def __str__(self):
-        return f"[{self.change_type}]:{self.source} -> {self.target}"
+        return f"[{self.change_type}{'<F>' if self.is_forced else ''}]:{self.source} -> {self.target}"
 
 class InstructionStorage(object):
     def __init__(self):
@@ -875,12 +884,12 @@ class InstructionStorage(object):
     def changes_num(self):
         return len(self.filechanges)
 
-    def add_file_change(self, change_type: str, sourcefiledir: str, targetfiledir: Optional[str] = None):
+    def add_file_change(self, change_type: str, sourcefiledir: str, targetfiledir: Optional[str] = None, *, is_forced: bool = False):
         if change_type not in ChangeTypes.all_types():
             raise TypeError(f"Change Type {change_type} is not a correct change type.")
         if targetfiledir is None and change_type not in (ChangeTypes.CH_TYPE_REMOVE, ChangeTypes.CH_TYPE_REMOVEFOLDER):
             raise ValueError("Target File Directory can only be empty if change type is removal.")
-        self.filechanges.add(FileChangeInstruction(change_type=change_type, sourcefiledir=sourcefiledir, targetfilepath=targetfiledir))
+        self.filechanges.add(FileChangeInstruction(change_type=change_type, sourcefiledir=sourcefiledir, targetfilepath=targetfiledir, is_forced=is_forced))
         self.invalidate_cache()
 
     def invalidate_cache(self, key: str = None):
@@ -1020,7 +1029,9 @@ def scan_backup_dirs(allbkps: list):
         sd = get_bkp_path(b.get('path'), b)
         ignored_paths_var = b.get("ignored_paths", ())
         ignored_paths = {f"{os.path.join(sd, x)}" for x in ignored_paths_var}
-        _scanresult[os.path.basename(sd)] = scan_directory(sd, ignored_paths, filenum=filen, print_progress=True)
+        _res = scan_directory(sd, ignored_paths, filenum=filen, print_progress=True)
+        if isinstance(_res, dict) and len(_res) > 0 or isinstance(_res, os.DirEntry):
+            _scanresult[os.path.basename(sd)] = _res
     return _scanresult
 
 
@@ -1087,6 +1098,15 @@ def get_actual_filepath(p: str):
 def get_actual_filename(p: str):
     return Path(p).resolve().name
 
+class FileState(object):
+    def __init__(self, bpath: str, spath: str, *, sourceexists: bool = False, backupexists: bool = False, sourcemtime: float = 0.0, backupmtime: float = 0.0):
+        self.bpath = bpath
+        self.spath = spath
+        self.sourceexists = sourceexists
+        self.backupexists = backupexists
+        self.sourcemtime = sourcemtime
+        self.backupmtime = backupmtime
+
 def scan_changes(allbkps: list):
     if launch_args.args.nooutput:
         print("Checking Files for changes | No Output Mode.")
@@ -1107,6 +1127,7 @@ def scan_changes(allbkps: list):
             if not launch_args.args.nooutput:
                 file_instruction_list.print_scan_status("Checking Files for changes:", sd, n, num_bkps)
             fp = get_bkp_path(sd, b)
+            _file_states: Dict[str, FileState] = dict()
             if os.path.exists(sd):
                 sourcescan = recursive_fileiter(sd, ignored_paths)
                 for f in sourcescan:
@@ -1114,31 +1135,24 @@ def scan_changes(allbkps: list):
                     fp_dir = os.path.dirname(fp).replace("\\", "/")
                     scan_filep = filep[len(fp_dir) if filep.startswith(fp_dir) else None:]
                     file: Optional[os.DirEntry] = deep_get(bkpscan, scan_filep.split("/")[1:], return_none=True)
-                    if not launch_args.args.nooutput:
-                        file_instruction_list.print_scan_status("Checking Files for changes:", sd, n, num_bkps, cur_file=f.path)
                     if mode == ManageModes.M_MODE_SYNC:
+                        _fs = _file_states.setdefault(filep, FileState(filep, f.path, sourceexists=True, sourcemtime=f.stat().st_mtime))
                         if file is not None:
-                            mtime_diff = abs(f.stat().st_mtime - file.stat().st_mtime)
-                            if mtime_diff > MAX_MODIFICATION_TIME_ERROR_OFFSET:
-                                if f.stat().st_mtime > modification_timestamp_db.get_timestamp(file):
-                                    file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_UPDATE, f.path, filep)
-                                elif f.stat().st_mtime < modification_timestamp_db.get_timestamp(file):
-                                    file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_UPDATE_NOTS, filep, f.path)
-                        else:
-                            file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_CREATE, f.path, filep)
+                            _fs.backupexists = True
+                            _fs.backupmtime = file.stat().st_mtime
                     else:
                         if file is not None:
                             if f.stat().st_mtime > modification_timestamp_db.get_timestamp(file) + MAX_MODIFICATION_TIME_ERROR_OFFSET or b.get('force_backup', False):
-                                file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_UPDATE, f.path, filep)
+                                file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_UPDATE, f.path, filep, is_forced=b.get('force_backup', False))
                         else:
                             file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_CREATE, f.path, filep)
             else:
                 if mode == ManageModes.M_MODE_SNAPSHOT:
                     if os.path.exists(fp):
                         file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_REMOVE if os.path.isfile(fp) else ChangeTypes.CH_TYPE_REMOVEFOLDER, fp)
-                else:
+                elif mode != ManageModes.M_MODE_SYNC:
                     change_tracker.add_error("{} Backup Source is Unavailable.".format(sd), wait_time=1)
-            if mode in (ManageModes.M_MODE_SNAPSHOT, ManageModes.M_MODE_SYNC) and os.path.exists(fp):
+            if os.path.exists(fp) and mode in (ManageModes.M_MODE_SNAPSHOT, ManageModes.M_MODE_SYNC):
                 _back_ignored_paths = {os.path.join(fp, x).replace('\\', '/') for x in ignored_paths_var}
                 bkp_rec_scan: List[os.DirEntry] = recursive_fileiter(fp, _back_ignored_paths)
                 if os.path.exists(sd):
@@ -1147,20 +1161,32 @@ def scan_changes(allbkps: list):
                     reverse_source_scan: Union[Dict[str, os.DirEntry], os.DirEntry] = dict()
                 for bkpf in bkp_rec_scan:
                     sf = get_src_path(bkpf.path, b)
-                    sfile: Optional[os.DirEntry] = deep_get(reverse_source_scan, sf[len(sd)+1 if sf.startswith(sd) else None:].split("/"), return_none=True)
+                    sfile: Optional[os.DirEntry] = deep_get(reverse_source_scan, sf[len(sd) + 1 if sf.startswith(sd) else None:].split("/"), return_none=True)
                     if mode == ManageModes.M_MODE_SNAPSHOT:
                         if sfile is None:
                             file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_REMOVE if os.path.isfile(bkpf.path) else ChangeTypes.CH_TYPE_REMOVEFOLDER, bkpf.path)
                     elif mode == ManageModes.M_MODE_SYNC:
+                        _fs = _file_states.setdefault(bkpf.path.replace("\\", "/"), FileState(bkpf.path.replace("\\", "/"), sf, backupexists=True, backupmtime=bkpf.stat().st_mtime))
                         if sfile is not None:
-                            mtime_diff = abs(bkpf.stat().st_mtime - sfile.stat().st_mtime)
-                            if mtime_diff > MAX_MODIFICATION_TIME_ERROR_OFFSET:
-                                if bkpf.stat().st_mtime > sfile.stat().st_mtime:
-                                    file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_UPDATE_NOTS, bkpf.path, sfile.path)
-                                elif bkpf.stat().st_mtime < sfile.stat().st_mtime:
-                                    file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_UPDATE, sfile.path, bkpf.path)
+                            _fs.sourceexists = True
+                            _fs.sourcemtime = sfile.stat().st_mtime
+            if mode == ManageModes.M_MODE_SYNC:
+                for filestate in _file_states.values():
+                    if filestate.sourceexists != filestate.backupexists:
+                        if max(filestate.sourcemtime, filestate.backupmtime) > modification_timestamp_db.snapshot_ts:
+                            if filestate.sourceexists:
+                                file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_CREATE, filestate.spath, filestate.bpath)
+                            else:
+                                file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_CREATE_NOTS, filestate.bpath, filestate.spath)
                         else:
-                            file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_CREATE_NOTS, bkpf.path, sf)
+                            file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_REMOVE, filestate.spath if filestate.sourceexists else filestate.bpath)
+                    else:
+                        mtime_diff = abs(filestate.sourcemtime - filestate.backupmtime)
+                        if mtime_diff > MAX_MODIFICATION_TIME_ERROR_OFFSET:
+                            if filestate.sourcemtime > filestate.backupmtime:
+                                file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_UPDATE, filestate.spath, filestate.bpath)
+                            if filestate.sourcemtime < filestate.backupmtime:
+                                file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_UPDATE_NOTS, filestate.bpath, filestate.spath)
         except Exception as _e:
             change_tracker.add_error(f"Scanning File {sd} raised an exception: {_e.__traceback__.tb_lineno} | {_e.__class__.__name__}: {_e.args}")
     else:
@@ -1195,7 +1221,10 @@ def process():
             ANSIEscape.set_cursor_display(True)
             _changesnum = len(file_instruction_list.filechanges)
             for change in file_instruction_list.filechanges:
-                _text = f"[{ANSIEscape.get_colored_text(change.change_type.upper(), text_color=ANSIEscape.ForegroundTextColor.red if change.change_type == ChangeTypes.CH_TYPE_REMOVE else ANSIEscape.ForegroundTextColor.green if change.change_type in (ChangeTypes.CH_TYPE_CREATE, ChangeTypes.CH_TYPE_CREATE_NOTS) else ANSIEscape.ForegroundTextColor.bright_green if change.change_type in (ChangeTypes.CH_TYPE_UPDATE, ChangeTypes.CH_TYPE_UPDATE_NOTS) else None)}]\n{change.source}\n  <{format_bytes(change.sourcesize)}>mod@{notzformat.format(datetime.datetime.fromtimestamp(change.sourcemtime))}({change.sourcemtime})\n  ~{format_bytes(change.diffspace)}~\n{change.target}"
+                _text = f"[{ANSIEscape.get_colored_text(change.change_type.upper(), text_color=ANSIEscape.ForegroundTextColor.red if change.change_type == ChangeTypes.CH_TYPE_REMOVE else ANSIEscape.ForegroundTextColor.green if change.change_type in (ChangeTypes.CH_TYPE_CREATE, ChangeTypes.CH_TYPE_CREATE_NOTS) else ANSIEscape.ForegroundTextColor.bright_green if change.change_type in (ChangeTypes.CH_TYPE_UPDATE, ChangeTypes.CH_TYPE_UPDATE_NOTS) else None)}{ANSIEscape.get_colored_text(' <Forced>', text_color=ANSIEscape.ForegroundTextColor.bright_cyan) if change.is_forced else ''}]\n{change.source}"
+                _text += f"\n  <{format_bytes(change.sourcesize)}>mod@{notzformat.format(datetime.datetime.fromtimestamp(change.sourcemtime))}({change.sourcemtime})"
+                if change.target is not None:
+                    _text += f"\n  ~{format_bytes(change.diffspace)}~\n{change.target}"
                 if change.change_type in (ChangeTypes.CH_TYPE_UPDATE, ChangeTypes.CH_TYPE_UPDATE_NOTS):
                     _text += f"\n  <{format_bytes(change.targetsize)}>mod@{notzformat.format(datetime.datetime.fromtimestamp(change.targetmtime))}({change.targetmtime})"
                 print(_text, flush=True)
