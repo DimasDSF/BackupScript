@@ -76,7 +76,7 @@ try:
             "backup_dirs": [
                 {
                     "path": "SourcePath_Here",
-                    "backup_path_override": None,
+                    "subpath": None,
                     "force_backup": False,
                     "mode": ManageModes.M_MODE_DEFAULT,
                     "ignored_paths": []
