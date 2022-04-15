@@ -638,7 +638,7 @@ class ModTimestampDB(object):
 
     @property
     def data(self):
-        return self.__data.get('files')
+        return self.__data.get('files', dict())
 
     @property
     def storage(self):
@@ -1451,6 +1451,7 @@ if __name__ == "__main__":
     ap.add_argument("-np", "--nopause", help="disable user input requirement", action="store_true")
     ap.add_argument("-nl", "--nologs", help="disable log creation", action="store_true")
     ap.add_argument("-ncl", "--nochangelist", help="disable showing a list of changes before copying", action="store_true")
+    ap.add_argument("-ve", "--verboseerrors", help="show more info on error", action="store_true")
     ap.add_argument("-prof", "--profile", help="run with a profiler active, display the results in the end", action="store_true")
     args = ap.parse_args()
     launch_args.update_args(args)
@@ -1474,16 +1475,16 @@ if __name__ == "__main__":
         else:
             start_menu()
     except Exception as e:
+        print(f"Exception Occured {'while Launching' if finished_init is False else ''}: {type(e).__name__} : {e.args}")
+        if launch_args.args.verboseerrors:
+            import traceback
+            print("\n".join(traceback.format_tb(e.__traceback__)))
         if finished_init is False:
-            print("Exception Occured while Launching: {0} : {1}".format(type(e).__name__, e.args))
             print('Press any key to try redownloading the script.')
             if not launch_args.args.nopause:
                 os.system('pause >nul')
             dl_update()
         else:
-            import traceback
-            print("Exception Occured: {0} : {1}".format(type(e).__name__, e.args))
-            print("\n".join(traceback.format_tb(e.__traceback__)))
             if not launch_args.args.nopause:
                 os.system("pause")
             raise e
