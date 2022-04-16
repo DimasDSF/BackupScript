@@ -626,6 +626,8 @@ def _copyfileobj_readinto_w_cb(fsrc, fdst, length=shutil.COPY_BUFSIZE, *, callba
 
 @lru_cache(maxsize=None)
 def get_modification_time(path: str):
+    if not os.path.exists(path):
+        return 0.0
     return os.stat(path).st_mtime
 
 class ModTimestampDB(object):
@@ -638,7 +640,7 @@ class ModTimestampDB(object):
 
     @property
     def data(self):
-        return self.__data.get('files')
+        return self.__data.get('files', dict())
 
     @property
     def storage(self):
@@ -1173,7 +1175,8 @@ def scan_changes(allbkps: list):
             if mode == ManageModes.M_MODE_SYNC:
                 for filestate in _file_states.values():
                     if filestate.sourceexists != filestate.backupexists:
-                        if max(filestate.sourcemtime, filestate.backupmtime) > modification_timestamp_db.snapshot_ts:
+                        file_snapshot_ts = modification_timestamp_db.get_timestamp(filestate.bpath)
+                        if max(filestate.sourcemtime, filestate.backupmtime) > file_snapshot_ts:
                             if filestate.sourceexists:
                                 file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_CREATE, filestate.spath, filestate.bpath)
                             else:
@@ -1451,6 +1454,7 @@ if __name__ == "__main__":
     ap.add_argument("-np", "--nopause", help="disable user input requirement", action="store_true")
     ap.add_argument("-nl", "--nologs", help="disable log creation", action="store_true")
     ap.add_argument("-ncl", "--nochangelist", help="disable showing a list of changes before copying", action="store_true")
+    ap.add_argument("-ve", "--verboseerrors", help="show more info on error", action="store_true")
     ap.add_argument("-prof", "--profile", help="run with a profiler active, display the results in the end", action="store_true")
     args = ap.parse_args()
     launch_args.update_args(args)
@@ -1474,16 +1478,16 @@ if __name__ == "__main__":
         else:
             start_menu()
     except Exception as e:
+        print(f"Exception Occured {'while Launching' if finished_init is False else ''}: {type(e).__name__} : {e.args}")
+        if launch_args.args.verboseerrors:
+            import traceback
+            print("\n".join(traceback.format_tb(e.__traceback__)))
         if finished_init is False:
-            print("Exception Occured while Launching: {0} : {1}".format(type(e).__name__, e.args))
             print('Press any key to try redownloading the script.')
             if not launch_args.args.nopause:
                 os.system('pause >nul')
             dl_update()
         else:
-            import traceback
-            print("Exception Occured: {0} : {1}".format(type(e).__name__, e.args))
-            print("\n".join(traceback.format_tb(e.__traceback__)))
             if not launch_args.args.nopause:
                 os.system("pause")
             raise e
