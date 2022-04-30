@@ -625,14 +625,13 @@ def _copyfileobj_readinto_w_cb(fsrc, fdst, length=shutil.COPY_BUFSIZE, *, callba
 #####################################################
 
 @lru_cache(maxsize=None)
-def get_path_modification_time(path: str):
-    if not os.path.exists(path):
-        return 0.0
-    _stat = os.stat(path)
-    return max(_stat.st_mtime, _stat.st_ctime)
-
-def get_modification_time(_stat: os.stat_result):
-    return max(_stat.st_ctime, _stat.st_mtime)
+def get_file_stat_data(f: Union[str, os.stat_result]):
+    if isinstance(f, os.stat_result):
+        return dict(ctime=f.st_ctime, mtime=f.st_mtime)
+    if not os.path.exists(f):
+        return dict(ctime=0.0, ftime=0.0)
+    _stat = os.stat(f)
+    return dict(ctime=_stat.st_ctime, mtime=_stat.st_mtime)
 
 class ModTimestampDB(object):
     def __init__(self, storage_path: str = "db/timestamps.json", *, autosave: bool = False):
@@ -653,18 +652,19 @@ class ModTimestampDB(object):
     def get_timestamp(self, filepath: Union[str, os.DirEntry], *, get_from_file: bool = True):
         fp = filepath if isinstance(filepath, str) else filepath.path
         _ts = self.data.get(fp.replace("\\", "/"), None)
-        if _ts is None:
+        if _ts is None or not isinstance(_ts, dict):
+            f_ts = get_file_stat_data(filepath)
+            self.save_timestamp(fp, f_ts, force=True)
             if get_from_file:
-                _ts = get_path_modification_time(filepath) if isinstance(filepath, str) else get_modification_time(filepath.stat())
-                self.save_timestamp(fp, _ts, force=True)
+                _ts = f_ts
             else:
-                return 0.0
+                return dict(ctime=0.0, mtime=0.0)
         return _ts
 
-    def save_timestamp(self, filepath: str, timestamp: float = None, *, force: bool = False):
+    def save_timestamp(self, filepath: str, timestamp: Dict[str, float] = None, *, force: bool = False):
         if timestamp is None:
-            timestamp = get_path_modification_time(filepath)
-        if timestamp > 0.0 and abs(self.data.get(filepath.replace("\\", "/"), 0) - timestamp) > MAX_MODIFICATION_TIME_ERROR_OFFSET or force:
+            timestamp = get_file_stat_data(filepath)
+        if timestamp['mtime'] > 0.0 and abs(self.data.get(filepath.replace("\\", "/"), dict(mtime=0.0, ctime=0.0))['mtime'] - timestamp['mtime']) > MAX_MODIFICATION_TIME_ERROR_OFFSET or force:
             self.data[filepath.replace("\\", "/")] = timestamp
             self.unsaved_changes += 1
             if self.unsaved_changes > 10 and self.autosave:
@@ -858,7 +858,7 @@ class FileChangeInstruction(object):
             return 0
         elif not os.path.exists(self.source):
             return 0
-        return get_path_modification_time(self.source)
+        return get_file_stat_data(self.source)['mtime']
 
     @cached_property
     def targetmtime(self):
@@ -866,7 +866,7 @@ class FileChangeInstruction(object):
             return 0
         elif not os.path.exists(self.target):
             return 0
-        return get_path_modification_time(self.target)
+        return get_file_stat_data(self.target)['mtime']
 
     def __hash__(self):
         return hash((self.change_type, self.source, self.target))
@@ -972,7 +972,7 @@ def del_file_or_dir(path):
 
 def get_modification_dt_from_file(filepath):
     try:
-        return datetime.datetime.fromtimestamp(get_path_modification_time(filepath))
+        return datetime.datetime.fromtimestamp(get_file_stat_data(filepath)['mtime'])
     except:
         return None
 
@@ -1124,13 +1124,15 @@ def get_actual_filename(p: str):
     return Path(p).resolve().name
 
 class FileState(object):
-    def __init__(self, bpath: str, spath: str, *, sourceexists: bool = False, backupexists: bool = False, sourcemtime: float = 0.0, backupmtime: float = 0.0):
+    def __init__(self, bpath: str, spath: str, *, sourceexists: bool = False, backupexists: bool = False, sourcemtime: float = 0.0, backupmtime: float = 0.0, sourcectime: float = 0.0, backupctime: float = 0.0):
         self.bpath = bpath
         self.spath = spath
         self.sourceexists = sourceexists
         self.backupexists = backupexists
         self.sourcemtime = sourcemtime
+        self.sourcectime = sourcectime
         self.backupmtime = backupmtime
+        self.backupctime = backupctime
 
 def scan_changes(allbkps: list):
     if launch_args.args.nooutput:
@@ -1164,17 +1166,17 @@ def scan_changes(allbkps: list):
                     if not launch_args.args.nooutput:
                         file_instruction_list.print_scan_status("Checking Files for changes:", sd, n, num_bkps, cur_file=f.path)
                     if mode == ManageModes.M_MODE_SYNC:
-                        _fs = _file_states.setdefault(filep, FileState(filep, f.path, sourceexists=True, sourcemtime=get_modification_time(f.stat())))
-                        if latest_change_ts[0] < _fs.sourcemtime:
-                            latest_change_ts[0] = _fs.sourcemtime
+                        _fs = _file_states.setdefault(filep, FileState(filep, f.path, sourceexists=True, sourcemtime=get_file_stat_data(f.stat())['mtime'], sourcectime=get_file_stat_data(f.stat())['ctime']))
+                        if latest_change_ts[0] < max(_fs.sourcemtime, _fs.sourcectime):
+                            latest_change_ts[0] = max(_fs.sourcemtime, _fs.sourcectime)
                         if file is not None:
                             _fs.backupexists = True
-                            _fs.backupmtime = get_modification_time(file.stat())
-                            if latest_change_ts[1] < _fs.backupmtime:
-                                latest_change_ts[1] = _fs.backupmtime
+                            _fs.backupmtime, _fs.backupctime = get_file_stat_data(file.stat())['mtime'], get_file_stat_data(file.stat())['ctime']
+                            if latest_change_ts[1] < max(_fs.backupmtime, _fs.backupctime):
+                                latest_change_ts[1] = max(_fs.backupmtime, _fs.backupctime)
                     else:
                         if file is not None:
-                            if get_modification_time(f.stat()) > modification_timestamp_db.get_timestamp(file) + MAX_MODIFICATION_TIME_ERROR_OFFSET or b.get('force_backup', False):
+                            if get_file_stat_data(f.stat())['mtime'] > modification_timestamp_db.get_timestamp(file)['mtime'] + MAX_MODIFICATION_TIME_ERROR_OFFSET or b.get('force_backup', False):
                                 file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_UPDATE, f.path, filep, is_forced=b.get('force_backup', False))
                         else:
                             file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_CREATE, f.path, filep)
@@ -1200,23 +1202,23 @@ def scan_changes(allbkps: list):
                         if sfile is None:
                             file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_REMOVE if os.path.isfile(bkpf.path) else ChangeTypes.CH_TYPE_REMOVEFOLDER, bkpf.path)
                     elif mode == ManageModes.M_MODE_SYNC:
-                        _fs = _file_states.setdefault(bkpf.path.replace("\\", "/"), FileState(bkpf.path.replace("\\", "/"), sf, backupexists=True, backupmtime=get_modification_time(bkpf.stat())))
-                        if latest_change_ts[1] < _fs.backupmtime:
-                            latest_change_ts[1] = _fs.sourcemtime
+                        _fs = _file_states.setdefault(bkpf.path.replace("\\", "/"), FileState(bkpf.path.replace("\\", "/"), sf, backupexists=True, backupmtime=get_file_stat_data(bkpf.stat())['mtime'], backupctime=get_file_stat_data(bkpf.stat())['ctime']))
+                        if latest_change_ts[1] < max(_fs.backupmtime, _fs.backupctime):
+                            latest_change_ts[1] = max(_fs.backupmtime, _fs.backupctime)
                         if sfile is not None:
                             _fs.sourceexists = True
-                            _fs.sourcemtime = get_modification_time(sfile.stat())
-                            if latest_change_ts[0] < _fs.sourcemtime:
-                                latest_change_ts[0] = _fs.sourcemtime
+                            _fs.sourcemtime, _fssourcectime = get_file_stat_data(sfile.stat())['mtime'], get_file_stat_data(sfile.stat())['ctime']
+                            if latest_change_ts[0] < max(_fs.sourcemtime, _fs.sourcectime):
+                                latest_change_ts[0] = max(_fs.sourcemtime, _fs.sourcectime)
             if mode == ManageModes.M_MODE_SYNC:
                 for filestate in _file_states.values():
                     if not launch_args.args.nooutput:
                         file_instruction_list.print_scan_status("Running file sync logic:", sd, n, num_bkps, cur_file=filestate.bpath)
+                    file_snapshot_ts = modification_timestamp_db.get_timestamp(filestate.bpath, get_from_file=False)
                     if filestate.sourceexists != filestate.backupexists:
-                        file_snapshot_ts = modification_timestamp_db.get_timestamp(filestate.bpath, get_from_file=False)
-                        if modification_timestamp_db.snapshot_ts < 1.0 or (max(filestate.sourcemtime, filestate.backupmtime) > file_snapshot_ts
-                                                                            and ((filestate.sourceexists and filestate.sourcemtime > modification_timestamp_db.snapshot_ts)
-                                                                                or (filestate.backupexists and filestate.backupmtime > modification_timestamp_db.snapshot_ts))):
+                        # Only one file exists, time to figure out if it was deleted or added
+                        snap_change_time = max(file_snapshot_ts.get('ctime', 0), file_snapshot_ts.get('mtime', 0))
+                        if modification_timestamp_db.snapshot_ts < 1.0 or (snap_change_time == 0) or (snap_change_time != 0 and (snap_change_time < max(filestate.backupctime, filestate.sourcectime, filestate.backupmtime, filestate.sourcemtime))):
                             if filestate.sourceexists:
                                 file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_CREATE, filestate.spath, filestate.bpath)
                             else:
@@ -1386,7 +1388,11 @@ def start_menu():
             if len(modes) > 0:
                 modes += "\n"
             modes += "{0} mode enabled".format(a)
-    print("Automated Backup Script.{2}\nVersion:{0}/{1}\nTimestamp DB entries: {3}\nPress any key to proceed\nClose the app to cancel.".format(version.get('version', "Unavailable"), version.get('coderev', "Unavailable"), "\n{}".format(modes) if len(modes) > 0 else "", len(modification_timestamp_db.data)))
+    print("Automated Backup Script.{2}\nVersion:{0}/{1}".format(version.get('version', "Unavailable"), version.get('coderev', "Unavailable"), "\n{}".format(modes) if len(modes) > 0 else ""))
+    print(f"Timestamp DB entries: {len(modification_timestamp_db.data)}, @{notzformat.format(datetime.datetime.fromtimestamp(modification_timestamp_db.snapshot_ts, tz=shift_tz))}")
+    print(f"{ANSIEscape.get_colored_text('Press any key to proceed', text_color=ANSIEscape.ForegroundTextColor.bright_yellow)}\n{ANSIEscape.get_colored_text('Close the app to cancel', text_color=ANSIEscape.ForegroundTextColor.bright_red)}.")
+    if launch_args.args.nologs and launch_args.args.profile:
+        print(ANSIEscape.get_colored_text("Profile Mode will output results to terminal due to NoLogs Mode being active!", text_color=ANSIEscape.ForegroundTextColor.red))
     if not launch_args.args.offline:
         lvd = is_latest_version()
         if lvd is None:
@@ -1471,6 +1477,7 @@ def start_menu():
                 ul.writelines(change_tracker.errors)
     print("Done.")
     if modification_timestamp_db.unsaved_changes > 0:
+        print(ANSIEscape.get_colored_text(f"ModTimestamp DB changes: {modification_timestamp_db.unsaved_changes}", text_color=ANSIEscape.ForegroundTextColor.cyan))
         modification_timestamp_db.save()
     if change_tracker.num_errors > 0:
         print(f"{ANSIEscape.get_colored_text(f'Encountered {change_tracker.num_errors} errors.', text_color=ANSIEscape.ForegroundTextColor.yellow)}")
@@ -1513,6 +1520,8 @@ if __name__ == "__main__":
                     pstats.Stats(profiler, stream=s).strip_dirs().sort_stats("cumtime").print_stats()
                     ul.write(s.getvalue())
                 os.system("start " + os.path.join(ulp, 'profiler_output.log').replace('\\', '/'))
+            else:
+                profiler.print_stats("cumtime")
         else:
             start_menu()
     except Exception as e:
