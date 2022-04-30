@@ -629,7 +629,7 @@ def get_file_stat_data(f: Union[str, os.stat_result]):
     if isinstance(f, os.stat_result):
         return dict(ctime=f.st_ctime, mtime=f.st_mtime)
     if not os.path.exists(f):
-        return dict(ctime=0.0, ftime=0.0)
+        return dict(ctime=0.0, mtime=0.0)
     _stat = os.stat(f)
     return dict(ctime=_stat.st_ctime, mtime=_stat.st_mtime)
 
@@ -1218,7 +1218,7 @@ def scan_changes(allbkps: list):
                     if filestate.sourceexists != filestate.backupexists:
                         # Only one file exists, time to figure out if it was deleted or added
                         snap_change_time = max(file_snapshot_ts.get('ctime', 0), file_snapshot_ts.get('mtime', 0))
-                        if modification_timestamp_db.snapshot_ts < 1.0 or (snap_change_time == 0) or (snap_change_time != 0 and (snap_change_time < max(filestate.backupctime, filestate.sourcectime, filestate.backupmtime, filestate.sourcemtime))):
+                        if (snap_change_time == 0) or (snap_change_time != 0 and (snap_change_time < max(filestate.backupctime, filestate.sourcectime, filestate.backupmtime, filestate.sourcemtime))):
                             if filestate.sourceexists:
                                 file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_CREATE, filestate.spath, filestate.bpath)
                             else:
