@@ -624,7 +624,6 @@ def _copyfileobj_readinto_w_cb(fsrc, fdst, length=shutil.COPY_BUFSIZE, *, callba
 
 #####################################################
 
-@lru_cache(maxsize=None)
 def get_file_stat_data(f: Union[str, os.stat_result, os.DirEntry]):
     if isinstance(f, os.stat_result):
         return dict(ctime=f.st_ctime, mtime=f.st_mtime)
@@ -641,6 +640,7 @@ class ModTimestampDB(object):
         self.storage_rel_path = storage_path
         self.__data = dict(timestamp=0.0, files=dict())
         self.load()
+        self.changes = dict()
         self.unsaved_changes = 0
         self.autosave = autosave
 
@@ -666,7 +666,7 @@ class ModTimestampDB(object):
                 return dict(ctime=0.0, mtime=0.0)
         return _ts
 
-    def save_timestamp(self, filepath: str, timestamp: Dict[str, float] = None, *, force: bool = False):
+    def save_timestamp(self, filepath: str, timestamp: Dict[str, float] = None, *, bypass_changes_buffer: bool = False, force: bool = False):
         if timestamp is None:
             timestamp = get_file_stat_data(filepath)
         if timestamp['mtime'] > 0.0:
@@ -674,10 +674,20 @@ class ModTimestampDB(object):
             if _ts is None or not isinstance(_ts, dict):
                 _ts = dict(mtime=0.0, ctime=0.0)
             if abs(_ts['mtime'] - timestamp['mtime']) > MAX_MODIFICATION_TIME_ERROR_OFFSET or force:
-                self.data[filepath.replace("\\", "/")] = timestamp
+                if bypass_changes_buffer:
+                    self.data[filepath.replace("\\", "/")] = timestamp
+                else:
+                    self.changes[filepath.replace("\\", "/")] = timestamp
                 self.unsaved_changes += 1
                 if self.unsaved_changes > 10 and self.autosave:
                     self.save()
+
+    def remove_timestamp(self, filepath: str):
+        _removed_ts = self.data.pop(filepath.replace("\\", "/"), None)
+        if _removed_ts is not None:
+            self.unsaved_changes += 1
+            if self.unsaved_changes > 10 and self.autosave:
+                self.save()
 
     @property
     def snapshot_ts(self):
@@ -696,6 +706,8 @@ class ModTimestampDB(object):
     def save(self, init: bool = False):
         if not init:
             self.snapshot_ts = time.time()
+        self.data.update(self.changes)
+        self.changes.clear()
         if not os.path.exists(os.path.dirname(self.storage)):
             os.makedirs(os.path.dirname(self.storage), exist_ok=True)
         with open(self.storage, "w+", encoding='utf-8') as f:
@@ -1232,7 +1244,10 @@ def scan_changes(allbkps: list):
                     if filestate.sourceexists != filestate.backupexists:
                         # Only one file exists, time to figure out if it was deleted or added
                         snap_change_time = max(file_snapshot_ts.get('ctime', 0), file_snapshot_ts.get('mtime', 0))
-                        if (snap_change_time == 0) or (snap_change_time != 0 and (snap_change_time < max(filestate.backupctime, filestate.sourcectime, filestate.backupmtime, filestate.sourcemtime))):
+                        _max_bkp_mod_time = max(filestate.backupctime, filestate.backupmtime)
+                        _max_src_mod_time = max(filestate.sourcectime, filestate.sourcemtime)
+                        _max_mod_time = max(_max_bkp_mod_time, _max_src_mod_time)
+                        if (snap_change_time == 0) or (snap_change_time != 0 and (snap_change_time < _max_mod_time)):
                             if filestate.sourceexists:
                                 file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_CREATE, filestate.spath, filestate.bpath)
                             else:
@@ -1367,6 +1382,7 @@ def process():
                 elif _cur_file.change_type == ChangeTypes.CH_TYPE_REMOVE or _cur_file.change_type == ChangeTypes.CH_TYPE_REMOVEFOLDER:
                     bytes_done += _cur_file.diffsize
                     del_file_or_dir(get_actual_filepath(_cur_file.source))
+                    modification_timestamp_db.remove_timestamp(_cur_file.source)
                     change_tracker.add_file_change(_cur_file.change_type, "Removed | {0}".format(get_actual_filepath(_cur_file.source)), should_print=False)
             except Exception as fileupd_exception:
                 change_tracker.add_error("Failed to {3} file: {0} due to an Exception {1}. {2}".format(str(_cur_file), type(fileupd_exception).__name__, fileupd_exception.args, _cur_file.change_type), wait_time=5)
