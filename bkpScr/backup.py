@@ -1014,7 +1014,8 @@ def get_bkp_path(path, source_data: Dict[str, str]):
 def get_src_path(bkpp: str, source_data: Dict[str, str]):
     path: str = source_data.get("path")
     _subp = bkpp.replace("\\", "/")[len(source_data.get("subpath", "")) + len(bkp_root) + 1:]
-    _bkpdir = os.path.join(*path.split("/")[get_path_reduction(source_data)+1:]).replace("\\", "/")
+    _path_red = get_path_reduction(source_data)+1 if get_path_reduction(source_data) is not None else None
+    _bkpdir = os.path.join(*path.split("/")[_path_red:]).replace("\\", "/")
     bkpdir_ind = path.find(_bkpdir)
     if len(_bkpdir) > 0 and bkpdir_ind != -1:
         _fixed_sourcedir = path[:bkpdir_ind] + path[bkpdir_ind+len(_bkpdir):]
