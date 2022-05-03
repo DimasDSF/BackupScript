@@ -1000,10 +1000,10 @@ def pathsplitall(path):
             allparts.insert(0, parts[1])
     return allparts
 
-def get_path_reduction(source_data: Dict[str, str]):
+def get_path_reduction(source_data: Dict[str, Union[str, int]]):
     override_path_reduction = source_data.get("override_path_reduction", None)
     path_red = path_reduction if override_path_reduction is None else override_path_reduction
-    return path_red if path_red > 0 else None
+    return None if (path_red is None or (path_red is not None and path_red == 0)) else path_red
 
 def get_bkp_path(path, source_data: Dict[str, str]):
     subpath: Optional[str] = source_data.get("subpath", "")
