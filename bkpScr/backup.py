@@ -625,12 +625,15 @@ def _copyfileobj_readinto_w_cb(fsrc, fdst, length=shutil.COPY_BUFSIZE, *, callba
 #####################################################
 
 @lru_cache(maxsize=None)
-def get_file_stat_data(f: Union[str, os.stat_result]):
+def get_file_stat_data(f: Union[str, os.stat_result, os.DirEntry]):
     if isinstance(f, os.stat_result):
         return dict(ctime=f.st_ctime, mtime=f.st_mtime)
     if not os.path.exists(f):
         return dict(ctime=0.0, mtime=0.0)
-    _stat = os.stat(f)
+    if isinstance(f, os.DirEntry):
+        _stat = f.stat()
+    else:
+        _stat = os.stat(f)
     return dict(ctime=_stat.st_ctime, mtime=_stat.st_mtime)
 
 class ModTimestampDB(object):
@@ -652,7 +655,9 @@ class ModTimestampDB(object):
     def get_timestamp(self, filepath: Union[str, os.DirEntry], *, get_from_file: bool = True):
         fp = filepath if isinstance(filepath, str) else filepath.path
         _ts = self.data.get(fp.replace("\\", "/"), None)
-        if _ts is None or not isinstance(_ts, dict):
+        if not isinstance(_ts, dict):
+            _ts = None
+        if _ts is None:
             f_ts = get_file_stat_data(filepath)
             self.save_timestamp(fp, f_ts, force=True)
             if get_from_file:
@@ -664,11 +669,15 @@ class ModTimestampDB(object):
     def save_timestamp(self, filepath: str, timestamp: Dict[str, float] = None, *, force: bool = False):
         if timestamp is None:
             timestamp = get_file_stat_data(filepath)
-        if timestamp['mtime'] > 0.0 and abs(self.data.get(filepath.replace("\\", "/"), dict(mtime=0.0, ctime=0.0))['mtime'] - timestamp['mtime']) > MAX_MODIFICATION_TIME_ERROR_OFFSET or force:
-            self.data[filepath.replace("\\", "/")] = timestamp
-            self.unsaved_changes += 1
-            if self.unsaved_changes > 10 and self.autosave:
-                self.save()
+        if timestamp['mtime'] > 0.0:
+            _ts = self.data.get(filepath.replace("\\", "/"), None)
+            if _ts is None or not isinstance(_ts, dict):
+                _ts = dict(mtime=0.0, ctime=0.0)
+            if abs(_ts['mtime'] - timestamp['mtime']) > MAX_MODIFICATION_TIME_ERROR_OFFSET or force:
+                self.data[filepath.replace("\\", "/")] = timestamp
+                self.unsaved_changes += 1
+                if self.unsaved_changes > 10 and self.autosave:
+                    self.save()
 
     @property
     def snapshot_ts(self):
