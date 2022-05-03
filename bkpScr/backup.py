@@ -1014,13 +1014,17 @@ def get_bkp_path(path, source_data: Dict[str, str]):
 def get_src_path(bkpp: str, source_data: Dict[str, str]):
     path: str = source_data.get("path")
     _subp = bkpp.replace("\\", "/")[len(source_data.get("subpath", "")) + len(bkp_root) + 1:]
-    _path_red = get_path_reduction(source_data)+1 if get_path_reduction(source_data) is not None else None
-    _bkpdir = os.path.join(*path.split("/")[_path_red:]).replace("\\", "/")
-    bkpdir_ind = path.find(_bkpdir)
-    if len(_bkpdir) > 0 and bkpdir_ind != -1:
-        _fixed_sourcedir = path[:bkpdir_ind] + path[bkpdir_ind+len(_bkpdir):]
+    if get_path_reduction(source_data) is not None:
+        _path_red = get_path_reduction(source_data) + 1 if get_path_reduction(source_data) is not None else None
+        _bkpdir = os.path.join(*path.split("/")[_path_red:]).replace("\\", "/")
+        bkpdir_ind = path.find(_bkpdir)
+        if len(_bkpdir) > 0 and bkpdir_ind != -1:
+            _fixed_sourcedir = path[:bkpdir_ind] + path[bkpdir_ind + len(_bkpdir):]
+        else:
+            _fixed_sourcedir = path
     else:
-        _fixed_sourcedir = path
+        _drive = os.path.splitdrive(path)[0]
+        _fixed_sourcedir = f"{_drive}/" if len(_drive) > 0 else "/"
     _p = os.path.join(_fixed_sourcedir, _subp[1 if _subp.startswith("/") else None:]).replace("\\", "/")
     return _p
 
