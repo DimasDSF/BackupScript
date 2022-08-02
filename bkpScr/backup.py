@@ -740,6 +740,8 @@ class ModTimestampDB(object):
     COLRES_MODE_MANUAL = 0
     COLRES_MODE_AUTOLATEST = 1
 
+    DEFAULT_FILEDATA = dict(mtime=0.0, ctime=0.0, colresmode=0.0)
+
     def __init__(self, storage_path: str = "db/timestamps.json", *, autosave: bool = False):
         self.storage_rel_path = storage_path
         self.__data = dict(timestamp=0.0, files=dict())
@@ -760,51 +762,60 @@ class ModTimestampDB(object):
         if self.unsaved_changes > 10 and self.autosave:
             self.save()
 
+    @staticmethod
+    def get_empty_filedata_with_changes(**kwargs):
+        _empty = dict(ModTimestampDB.DEFAULT_FILEDATA)
+        if len(kwargs) > 0:
+            _empty.update(kwargs)
+        return _empty
+
     def get_timestamp(self, filepath: Union[str, os.DirEntry], *, get_from_file: bool = True):
         fp = filepath if isinstance(filepath, str) else filepath.path
         _ts = self.data.get(fp.replace("\\", "/"), None)
         if not isinstance(_ts, dict):
             _ts = None
         if _ts is None:
-            f_ts = get_file_stat_data(filepath)
+            f_ts = ModTimestampDB.get_empty_filedata_with_changes(**get_file_stat_data(filepath))
             self.save_timestamp(fp, f_ts, force=True)
             if get_from_file:
                 _ts = f_ts
             else:
-                return dict(ctime=0.0, mtime=0.0)
+                return ModTimestampDB.get_empty_filedata_with_changes()
         return _ts
 
     def save_timestamp(self, filepath: str, timestamp: Dict[str, float] = None, *, bypass_changes_buffer: bool = False, force: bool = False):
         if timestamp is None:
-            timestamp = get_file_stat_data(filepath)
+            timestamp = ModTimestampDB.get_empty_filedata_with_changes(**get_file_stat_data(filepath))
         if timestamp['mtime'] > 0.0:
             _ts = self.data.get(filepath.replace("\\", "/"), None)
             if _ts is None or not isinstance(_ts, dict):
-                _ts = dict(mtime=0.0, ctime=0.0)
+                _ts = ModTimestampDB.get_empty_filedata_with_changes()
             if abs(_ts['mtime'] - timestamp['mtime']) > MAX_MODIFICATION_TIME_ERROR_OFFSET or force:
                 if bypass_changes_buffer:
-                    self.data[filepath.replace("\\", "/")] = timestamp
+                    self.data.setdefault(filepath.replace("\\", "/"), ModTimestampDB.get_empty_filedata_with_changes()).update(timestamp)
                 else:
-                    self.changes[filepath.replace("\\", "/")] = timestamp
+                    self.changes.setdefault(filepath.replace("\\", "/"), ModTimestampDB.get_empty_filedata_with_changes()).update(timestamp)
                 self.unsaved_changes += 1
                 self.check_autosave()
 
     def get_resolve_mode(self, filepath: Union[str, os.DirEntry]):
         fp = filepath if isinstance(filepath, str) else filepath.path
-        return self.data.get(fp, dict()).get("colresmode", ModTimestampDB.COLRES_MODE_MANUAL)
+        if self.changes.get(fp.replace("\\", "/"), None) is not None:
+            return self.changes[fp.replace("\\", "/")].get("colresmode", ModTimestampDB.COLRES_MODE_MANUAL)
+        return self.data.get(fp.replace("\\", "/"), dict()).get("colresmode", ModTimestampDB.COLRES_MODE_MANUAL)
 
     def set_resolve_mode(self, filepath: str, mode: int):
-        filedata = self.data.setdefault(filepath, dict(mtime=0.0, ctime=0.0, colresmode=0))
-        if filedata.setdefault("colresmode", ModTimestampDB.COLRES_MODE_MANUAL) != mode:
-            filedata["colresmode"] = mode
-        self.save()
+        filedata = self.data.get(filepath.replace("\\", "/"), ModTimestampDB.get_empty_filedata_with_changes())
+        if filedata["colresmode"] != mode:
+            self.changes.setdefault(filepath.replace("\\", "/"))["colresmode"] = mode
+            self.unsaved_changes += 1
+            self.check_autosave()
 
     def remove_timestamp(self, filepath: str):
         _removed_ts = self.data.pop(filepath.replace("\\", "/"), None)
         if _removed_ts is not None:
             self.unsaved_changes += 1
-            if self.unsaved_changes > 10 and self.autosave:
-                self.save()
+            self.check_autosave()
 
     @property
     def snapshot_ts(self):
@@ -1409,7 +1420,7 @@ def scan_changes(allbkps: list):
                 elif _cur_col.sourcemtime < _cur_col.backupmtime:
                     file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_UPDATE_NOTS, _cur_col.bpath, _cur_col.spath)
             else:
-                _sel = selection_menu(True, (1, 2, 3, 4), f"Manual Intervention Required!{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}\n1. Keep Source {_cur_col.spath}{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}\n   {notzformat.format(datetime.datetime.fromtimestamp(_cur_col.sourcemtime))}{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}\n   < {notzformat.format(datetime.datetime.fromtimestamp(modification_timestamp_db.snapshot_ts))} >{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}\n2. Keep Backup {_cur_col.bpath}{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}\n   {notzformat.format(datetime.datetime.fromtimestamp(_cur_col.backupmtime))}{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}\n3. Skip{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}\n4. Always Autoupdate this file{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}")
+                _sel = selection_menu(True, (1, 2, 3, 4), f"{ANSIEscape.get_colored_text('Manual Intervention Required!', ANSIEscape.ForegroundTextColor.bright_green)}{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}\n1. Keep Source {_cur_col.spath}{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}\n   {notzformat.format(datetime.datetime.fromtimestamp(_cur_col.sourcemtime))}{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}\n\n< Last Sync: {ANSIEscape.get_colored_text(notzformat.format(datetime.datetime.fromtimestamp(modification_timestamp_db.snapshot_ts)), ANSIEscape.ForegroundTextColor.bright_cyan)} >{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}\n\n2. Keep Backup {_cur_col.bpath}{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}\n   {notzformat.format(datetime.datetime.fromtimestamp(_cur_col.backupmtime))}{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}\n3. Skip{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}\n4. Always Autoupdate this file{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}")
                 if _sel == 1:
                     file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_UPDATE, _cur_col.spath, _cur_col.bpath)
                 elif _sel == 2:
