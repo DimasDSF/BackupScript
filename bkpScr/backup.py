@@ -41,6 +41,7 @@ class ManageModes(object):
     def all_types() -> List[str]:
         return [y for x, y in ChangeTypes.__dict__.items() if x.startswith('M_MODE')]
 
+
 try:
     if os.path.exists(os.path.join(os.path.dirname(os.path.realpath(__file__)), "config.json")):
         def config_updater():
@@ -739,6 +740,7 @@ class ChangeTypes(object):
     CH_TYPE_CREATE_NOTS = 'create_nots'
     CH_TYPE_FOLDER = 'folder'
     CH_TYPE_REMOVEFOLDER = 'removef'
+    CH_TYPE_COLLISION = "collision"
 
     TYPE_TO_NAME_MAP = {
         CH_TYPE_UPDATE: "Update",
@@ -748,7 +750,8 @@ class ChangeTypes(object):
         CH_TYPE_CREATE: "Create",
         CH_TYPE_CREATE_NOTS: "Create",
         CH_TYPE_FOLDER: "CreateFolder",
-        CH_TYPE_REMOVEFOLDER: "RemoveFolder"
+        CH_TYPE_REMOVEFOLDER: "RemoveFolder",
+        CH_TYPE_COLLISION: "collision"
     }
 
     @staticmethod
@@ -913,7 +916,7 @@ class InstructionStorage(object):
         _cache = self.cache['space_req']
         if _cache[1]:
             return _cache[0]
-        _sum = sum(x.diffspace for x in self.filechanges)
+        _sum = sum(x.diffspace if x.change_type != ChangeTypes.CH_TYPE_COLLISION else x.sourcesize for x in self.filechanges)
         _cache = [_sum, True]
         return _sum
 
@@ -922,7 +925,7 @@ class InstructionStorage(object):
         _cache = self.cache['bytes_to_mod']
         if _cache[1]:
             return _cache[0]
-        _sum = sum(x.diffsize for x in self.filechanges)
+        _sum = sum(x.diffsize if x.change_type != ChangeTypes.CH_TYPE_COLLISION else x.sourcesize for x in self.filechanges)
         _cache = [_sum, True]
         return _sum
 
@@ -1257,10 +1260,13 @@ def scan_changes(allbkps: list):
                     else:
                         mtime_diff = abs(filestate.sourcemtime - filestate.backupmtime)
                         if mtime_diff > MAX_MODIFICATION_TIME_ERROR_OFFSET:
-                            if filestate.sourcemtime > filestate.backupmtime:
-                                file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_UPDATE, filestate.spath, filestate.bpath)
-                            if filestate.sourcemtime < filestate.backupmtime:
-                                file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_UPDATE_NOTS, filestate.bpath, filestate.spath)
+                            if filestate.sourcemtime > modification_timestamp_db.snapshot_ts and filestate.backupmtime > modification_timestamp_db.snapshot_ts:
+                                file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_COLLISION, filestate.spath, filestate.bpath)
+                            else:
+                                if filestate.sourcemtime > filestate.backupmtime:
+                                    file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_UPDATE, filestate.spath, filestate.bpath)
+                                elif filestate.sourcemtime < filestate.backupmtime:
+                                    file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_UPDATE_NOTS, filestate.bpath, filestate.spath)
         except Exception as _e:
             change_tracker.add_error(f"Scanning File {sd} raised an exception: {_e.__traceback__.tb_lineno} | {_e.__class__.__name__}: {_e.args}")
     else:
@@ -1295,7 +1301,7 @@ def process():
             ANSIEscape.set_cursor_display(True)
             _changesnum = len(file_instruction_list.filechanges)
             for change in sorted(file_instruction_list.filechanges, key=lambda x: x.change_type):
-                _text = f"[{ANSIEscape.get_colored_text(ChangeTypes.get_name(change.change_type).upper(), text_color=ANSIEscape.ForegroundTextColor.red if change.change_type == ChangeTypes.CH_TYPE_REMOVE else ANSIEscape.ForegroundTextColor.green if change.change_type in (ChangeTypes.CH_TYPE_CREATE, ChangeTypes.CH_TYPE_CREATE_NOTS) else ANSIEscape.ForegroundTextColor.bright_green if change.change_type in (ChangeTypes.CH_TYPE_UPDATE, ChangeTypes.CH_TYPE_UPDATE_NOTS) else None)}{ANSIEscape.get_colored_text(' <Forced>', text_color=ANSIEscape.ForegroundTextColor.bright_cyan) if change.is_forced else ''}]\n{change.source}"
+                _text = f"[{ANSIEscape.get_colored_text(ChangeTypes.get_name(change.change_type).upper(), text_color=ANSIEscape.ForegroundTextColor.red if change.change_type == ChangeTypes.CH_TYPE_REMOVE else ANSIEscape.ForegroundTextColor.green if change.change_type in (ChangeTypes.CH_TYPE_CREATE, ChangeTypes.CH_TYPE_CREATE_NOTS) else ANSIEscape.ForegroundTextColor.bright_green if change.change_type in (ChangeTypes.CH_TYPE_UPDATE, ChangeTypes.CH_TYPE_UPDATE_NOTS) else ANSIEscape.ForegroundTextColor.bright_red if change.change_type == ChangeTypes.CH_TYPE_COLLISION else None)}{ANSIEscape.get_colored_text(' <Forced>', text_color=ANSIEscape.ForegroundTextColor.bright_cyan) if change.is_forced else ''}]\n{change.source}"
                 _text += f"\n  <{format_bytes(change.sourcesize)}>mod@{notzformat.format(datetime.datetime.fromtimestamp(change.sourcemtime))}({change.sourcemtime})"
                 if change.target is not None:
                     _text += f"\n  ~{format_bytes(change.diffspace)}~\n{change.target}"
@@ -1384,6 +1390,10 @@ def process():
                     del_file_or_dir(get_actual_filepath(_cur_file.source))
                     modification_timestamp_db.remove_timestamp(_cur_file.source)
                     change_tracker.add_file_change(_cur_file.change_type, "Removed | {0}".format(get_actual_filepath(_cur_file.source)), should_print=False)
+                elif _cur_file.change_type == ChangeTypes.CH_TYPE_COLLISION:
+                    copy_with_callback(_cur_file.source, f"{os.path.splitext(_cur_file.target)[0]}_source_collision{os.path.splitext(_cur_file.target)[1]}", callback=partial(print_cur_status(print_cur_status, _cur_file.diffsize)))  # noqa
+                    bytes_done += _cur_file.diffsize
+                    change_tracker.add_file_change(ChangeTypes.CH_TYPE_COLLISION, f"Collision | {_cur_file.source} - {notzformat.format(_cur_file.sourcemtime)} < {notzformat.format(modification_timestamp_db.snapshot_ts)} > {_cur_file.target} - {notzformat.format(_cur_file.targetmtime)}")
             except Exception as fileupd_exception:
                 change_tracker.add_error("Failed to {3} file: {0} due to an Exception {1}. {2}".format(str(_cur_file), type(fileupd_exception).__name__, fileupd_exception.args, _cur_file.change_type), wait_time=5)
                 file_change_errors += 1
@@ -1505,6 +1515,13 @@ def start_menu():
         if change_tracker.num_errors > 0:
             with open(os.path.join(ulp, "errors.log"), "a", encoding="utf-8") as ul:
                 ul.writelines(change_tracker.errors)
+    if change_tracker.has_changes(ChangeTypes.CH_TYPE_COLLISION):
+        if not os.path.exists("bkpLogs"):
+            os.mkdir("bkpLogs")
+        ulp = os.path.join("bkpLogs", str(start_dt.date()))
+        with open(os.path.join(ulp, "collisions.log"), "a", encoding="utf-8") as ul:
+            ul.writelines(f"{str(x)}\n" for x in change_tracker.typetrackers[ChangeTypes.CH_TYPE_COLLISION].changes)
+        os.system("start " + os.path.join(ulp, 'collisions.log').replace('\\', '/'))
     print("Done.")
     if modification_timestamp_db.unsaved_changes > 0:
         print(ANSIEscape.get_colored_text(f"ModTimestamp DB changes: {modification_timestamp_db.unsaved_changes}", text_color=ANSIEscape.ForegroundTextColor.cyan))
