@@ -13,8 +13,11 @@ import argparse
 import locale
 import platform
 from pathlib import Path
-from functools import cached_property, partial, reduce, lru_cache
+from functools import cached_property, partial, reduce
 import operator
+
+from msvcrt import getch
+from msvcrt import kbhit
 
 from typing import Dict, Set, List, Optional, Callable, Union
 
@@ -401,6 +404,102 @@ def clear_terminal():
         os.system('cls' if sys.platform.lower() == "win32" else 'clear')
         sys.stdout.flush()
 
+def get_specific_character(numericonly, inplist: (list, tuple) = ()):
+    if kbhit():
+        character = getch().lower()
+        try:
+            character = character.decode()
+        except:
+            try:
+                character = character.decode(encoding=locale.getdefaultlocale()[1])
+            except:
+                character = None
+        if character is not None:
+            if numericonly:
+                if character.isnumeric():
+                    character = int(character)
+                    if character in inplist or len(inplist) == 0:
+                        return character
+            else:
+                if character in inplist or len(inplist) == 0:
+                    return character
+    else:
+        time.sleep(0.1)
+
+def selection_menu(numericonly, inplist: (list, tuple) = (), text="", cls=False, timeout: int = None, *, text_end: str = None):
+    if cls:
+        clear_terminal()
+    if len(text) > 0:
+        if text_end is None:
+            text_end = '\n'
+        print(text, end=text_end, flush=True)
+    ch = None
+    if timeout is not None:
+        endtime = time.time() + timeout
+    else:
+        endtime = -1
+    while time.time() < endtime or timeout is None:
+        ch = get_specific_character(numericonly, inplist)
+        if ch is not None:
+            if ch in inplist or len(inplist) == 0:
+                return ch
+    else:
+        raise TimeoutError('Selection Timed Out.')
+
+def splitintochunks(inlist, n):
+    for i in range(0, len(inlist), n):
+        yield inlist[i:i + n]
+
+class SelectionCancelledException(Exception):
+    pass
+
+def item_selection_menu(text: str = "", items: list = (), *, return_none_on_cancel: bool = True, item_name_function: Callable = None):
+    if len(items) <= 0:
+        return None
+    if item_name_function is None:
+        item_name_function = str
+    _cur_page = 0
+    _pages = list(splitintochunks(items, 8))
+    while True:
+        try:
+            clear_terminal()
+            _controls = [0]
+            _controls_desc = []
+            if _cur_page == 0:
+                _controls_desc.append("0: Cancel")
+            else:
+                _controls_desc.append("0: Prev Page")
+            if _cur_page + 1 < len(_pages):
+                _controls.append(9)
+                _controls_desc.append("9: Next Page")
+            _selection = selection_menu(True, _controls + list(range(1, len(_pages[_cur_page]) + 1)), "{0}\n{1}\n{2}\n{3}".format(text, f"Page: {_cur_page}", "".join([f'{newline_character}{n+1}: {item_name_function(x)}' for n, x in enumerate(_pages[_cur_page])]), newline_character.join(reversed(_controls_desc))))
+            if _selection in _controls:
+                if _selection == 0:
+                    if _cur_page > 0:
+                        _cur_page -= 1
+                    else:
+                        raise KeyboardInterrupt()
+                if _selection == 9:
+                    if _cur_page + 1 < len(_pages):
+                        _cur_page += 1
+            else:
+                return _pages[_cur_page][_selection-1]
+        except KeyboardInterrupt:
+            if return_none_on_cancel:
+                return None
+            raise SelectionCancelledException("Cancelled")
+
+def confirmation_menu(text="", *, print_selection: bool = False):
+    ch = selection_menu(False, ('y', 'n'), text, text_end='' if print_selection else None)
+    if ch == 'y':
+        if print_selection and len(text) > 0:
+            print(" Y")
+        return True
+    if print_selection and len(text) > 0:
+        print(" N")
+    return False
+
+
 def get_progress_bar(perc: float):
     status_slots = 50
     status_bars = math.floor((perc / 100) * status_slots)
@@ -435,6 +534,7 @@ shift_tz = datetime.timezone(datetime.timedelta(hours=config['tz'].get('hours', 
 path_reduction = config.get('path_reduction', None)
 path_reduction = None if path_reduction == 0 else path_reduction
 notzformat = '{:%d-%m-%Y %H:%M:%S}'
+newline_character = "\n"
 
 #####################################################
 # Version Check
@@ -637,6 +737,9 @@ def get_file_stat_data(f: Union[str, os.stat_result, os.DirEntry]):
     return dict(ctime=_stat.st_ctime, mtime=_stat.st_mtime)
 
 class ModTimestampDB(object):
+    COLRES_MODE_MANUAL = 0
+    COLRES_MODE_AUTOLATEST = 1
+
     def __init__(self, storage_path: str = "db/timestamps.json", *, autosave: bool = False):
         self.storage_rel_path = storage_path
         self.__data = dict(timestamp=0.0, files=dict())
@@ -652,6 +755,10 @@ class ModTimestampDB(object):
     @property
     def storage(self):
         return os.path.join(os.path.dirname(os.path.realpath(__file__)), self.storage_rel_path)
+
+    def check_autosave(self):
+        if self.unsaved_changes > 10 and self.autosave:
+            self.save()
 
     def get_timestamp(self, filepath: Union[str, os.DirEntry], *, get_from_file: bool = True):
         fp = filepath if isinstance(filepath, str) else filepath.path
@@ -680,8 +787,17 @@ class ModTimestampDB(object):
                 else:
                     self.changes[filepath.replace("\\", "/")] = timestamp
                 self.unsaved_changes += 1
-                if self.unsaved_changes > 10 and self.autosave:
-                    self.save()
+                self.check_autosave()
+
+    def get_resolve_mode(self, filepath: Union[str, os.DirEntry]):
+        fp = filepath if isinstance(filepath, str) else filepath.path
+        return self.data.get(fp, dict()).get("colresmode", ModTimestampDB.COLRES_MODE_MANUAL)
+
+    def set_resolve_mode(self, filepath: str, mode: int):
+        filedata = self.data.setdefault(filepath, dict(mtime=0.0, ctime=0.0, colresmode=0))
+        if filedata.setdefault("colresmode", ModTimestampDB.COLRES_MODE_MANUAL) != mode:
+            filedata["colresmode"] = mode
+        self.save()
 
     def remove_timestamp(self, filepath: str):
         _removed_ts = self.data.pop(filepath.replace("\\", "/"), None)
@@ -740,7 +856,6 @@ class ChangeTypes(object):
     CH_TYPE_CREATE_NOTS = 'create_nots'
     CH_TYPE_FOLDER = 'folder'
     CH_TYPE_REMOVEFOLDER = 'removef'
-    CH_TYPE_COLLISION = "collision"
 
     TYPE_TO_NAME_MAP = {
         CH_TYPE_UPDATE: "Update",
@@ -750,8 +865,7 @@ class ChangeTypes(object):
         CH_TYPE_CREATE: "Create",
         CH_TYPE_CREATE_NOTS: "Create",
         CH_TYPE_FOLDER: "CreateFolder",
-        CH_TYPE_REMOVEFOLDER: "RemoveFolder",
-        CH_TYPE_COLLISION: "collision"
+        CH_TYPE_REMOVEFOLDER: "RemoveFolder"
     }
 
     @staticmethod
@@ -916,7 +1030,7 @@ class InstructionStorage(object):
         _cache = self.cache['space_req']
         if _cache[1]:
             return _cache[0]
-        _sum = sum(x.diffspace if x.change_type != ChangeTypes.CH_TYPE_COLLISION else x.sourcesize for x in self.filechanges)
+        _sum = sum(x.diffspace for x in self.filechanges)
         _cache = [_sum, True]
         return _sum
 
@@ -925,7 +1039,7 @@ class InstructionStorage(object):
         _cache = self.cache['bytes_to_mod']
         if _cache[1]:
             return _cache[0]
-        _sum = sum(x.diffsize if x.change_type != ChangeTypes.CH_TYPE_COLLISION else x.sourcesize for x in self.filechanges)
+        _sum = sum(x.diffsize for x in self.filechanges)
         _cache = [_sum, True]
         return _sum
 
@@ -1163,6 +1277,14 @@ class FileState(object):
         self.backupmtime = backupmtime
         self.backupctime = backupctime
 
+    def __hash__(self):
+        return hash((self.spath, self.bpath))
+
+    def __eq__(self, other):
+        if not isinstance(other, type(self)):
+            raise TypeError(f"Cannot compare a {type(self).__name__} with {type(other).__name__}")
+        return other.__hash__() == self.__hash__()
+
 def scan_changes(allbkps: list):
     if launch_args.args.nooutput:
         print("Checking Files for changes | No Output Mode.")
@@ -1175,6 +1297,7 @@ def scan_changes(allbkps: list):
     print("Done.")
     time.sleep(2)
     latest_change_ts = [0.0, 0.0]
+    collisions: Set[FileState] = set()
     for n, b in enumerate(allbkps):
         sd = b.get('path')
         mode = b.get("mode", ManageModes.M_MODE_DEFAULT)
@@ -1261,7 +1384,7 @@ def scan_changes(allbkps: list):
                         mtime_diff = abs(filestate.sourcemtime - filestate.backupmtime)
                         if mtime_diff > MAX_MODIFICATION_TIME_ERROR_OFFSET:
                             if filestate.sourcemtime > modification_timestamp_db.snapshot_ts and filestate.backupmtime > modification_timestamp_db.snapshot_ts:
-                                file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_COLLISION, filestate.spath, filestate.bpath)
+                                collisions.add(filestate)
                             else:
                                 if filestate.sourcemtime > filestate.backupmtime:
                                     file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_UPDATE, filestate.spath, filestate.bpath)
@@ -1272,6 +1395,33 @@ def scan_changes(allbkps: list):
     else:
         if not launch_args.args.nooutput:
             file_instruction_list.print_scan_status("Checking Files for changes:", "", num_bkps, num_bkps)
+    if len(collisions) > 0:
+        clear_terminal()
+        print(f"Sync mode found {len(collisions)} collisions")
+        start_collisions = len(collisions)
+        while len(collisions) > 0:
+            _cur_col = collisions.pop()
+            ANSIEscape.set_cursor_pos(1, 2)
+            print(f"Processing collision {start_collisions-len(collisions)}/{start_collisions}{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}")
+            if launch_args.args.autoupdatecollisions or modification_timestamp_db.get_resolve_mode(_cur_col.bpath) is ModTimestampDB.COLRES_MODE_AUTOLATEST:
+                if _cur_col.sourcemtime > _cur_col.backupmtime:
+                    file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_UPDATE, _cur_col.spath, _cur_col.bpath)
+                elif _cur_col.sourcemtime < _cur_col.backupmtime:
+                    file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_UPDATE_NOTS, _cur_col.bpath, _cur_col.spath)
+            else:
+                _sel = selection_menu(True, (1, 2, 3, 4), f"Manual Intervention Required!{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}\n1. Keep Source {_cur_col.spath}{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}\n   {notzformat.format(_cur_col.sourcemtime)}{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}\n   < {notzformat.format(modification_timestamp_db.snapshot_ts)} >{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}\n2. Keep Backup {_cur_col.bpath}{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}\n   {notzformat.format(_cur_col.backupmtime)}{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}\n3. Skip{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}\n4. Always Autoupdate this file{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}")
+                if _sel == 1:
+                    file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_UPDATE, _cur_col.spath, _cur_col.bpath)
+                elif _sel == 2:
+                    file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_UPDATE_NOTS, _cur_col.bpath, _cur_col.spath)
+                elif _sel == 4:
+                    modification_timestamp_db.set_resolve_mode(_cur_col.bpath, ModTimestampDB.COLRES_MODE_AUTOLATEST)
+                    if _cur_col.sourcemtime > _cur_col.backupmtime:
+                        file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_UPDATE, _cur_col.spath,
+                                                              _cur_col.bpath)
+                    elif _cur_col.sourcemtime < _cur_col.backupmtime:
+                        file_instruction_list.add_file_change(ChangeTypes.CH_TYPE_UPDATE_NOTS, _cur_col.bpath,
+                                                              _cur_col.spath)
     ANSIEscape.set_cursor_display(True)
 
 def process():
@@ -1301,7 +1451,7 @@ def process():
             ANSIEscape.set_cursor_display(True)
             _changesnum = len(file_instruction_list.filechanges)
             for change in sorted(file_instruction_list.filechanges, key=lambda x: x.change_type):
-                _text = f"[{ANSIEscape.get_colored_text(ChangeTypes.get_name(change.change_type).upper(), text_color=ANSIEscape.ForegroundTextColor.red if change.change_type == ChangeTypes.CH_TYPE_REMOVE else ANSIEscape.ForegroundTextColor.green if change.change_type in (ChangeTypes.CH_TYPE_CREATE, ChangeTypes.CH_TYPE_CREATE_NOTS) else ANSIEscape.ForegroundTextColor.bright_green if change.change_type in (ChangeTypes.CH_TYPE_UPDATE, ChangeTypes.CH_TYPE_UPDATE_NOTS) else ANSIEscape.ForegroundTextColor.bright_red if change.change_type == ChangeTypes.CH_TYPE_COLLISION else None)}{ANSIEscape.get_colored_text(' <Forced>', text_color=ANSIEscape.ForegroundTextColor.bright_cyan) if change.is_forced else ''}]\n{change.source}"
+                _text = f"[{ANSIEscape.get_colored_text(ChangeTypes.get_name(change.change_type).upper(), text_color=ANSIEscape.ForegroundTextColor.red if change.change_type == ChangeTypes.CH_TYPE_REMOVE else ANSIEscape.ForegroundTextColor.green if change.change_type in (ChangeTypes.CH_TYPE_CREATE, ChangeTypes.CH_TYPE_CREATE_NOTS) else ANSIEscape.ForegroundTextColor.bright_green if change.change_type in (ChangeTypes.CH_TYPE_UPDATE, ChangeTypes.CH_TYPE_UPDATE_NOTS) else None)}{ANSIEscape.get_colored_text(' <Forced>', text_color=ANSIEscape.ForegroundTextColor.bright_cyan) if change.is_forced else ''}]\n{change.source}"
                 _text += f"\n  <{format_bytes(change.sourcesize)}>mod@{notzformat.format(datetime.datetime.fromtimestamp(change.sourcemtime))}({change.sourcemtime})"
                 if change.target is not None:
                     _text += f"\n  ~{format_bytes(change.diffspace)}~\n{change.target}"
@@ -1390,10 +1540,6 @@ def process():
                     del_file_or_dir(get_actual_filepath(_cur_file.source))
                     modification_timestamp_db.remove_timestamp(_cur_file.source)
                     change_tracker.add_file_change(_cur_file.change_type, "Removed | {0}".format(get_actual_filepath(_cur_file.source)), should_print=False)
-                elif _cur_file.change_type == ChangeTypes.CH_TYPE_COLLISION:
-                    copy_with_callback(_cur_file.source, f"{os.path.splitext(_cur_file.target)[0]}_source_collision{os.path.splitext(_cur_file.target)[1]}", callback=partial(print_cur_status(print_cur_status, _cur_file.diffsize)))  # noqa
-                    bytes_done += _cur_file.diffsize
-                    change_tracker.add_file_change(ChangeTypes.CH_TYPE_COLLISION, f"Collision | {_cur_file.source} - {notzformat.format(_cur_file.sourcemtime)} < {notzformat.format(modification_timestamp_db.snapshot_ts)} > {_cur_file.target} - {notzformat.format(_cur_file.targetmtime)}")
             except Exception as fileupd_exception:
                 change_tracker.add_error("Failed to {3} file: {0} due to an Exception {1}. {2}".format(str(_cur_file), type(fileupd_exception).__name__, fileupd_exception.args, _cur_file.change_type), wait_time=5)
                 file_change_errors += 1
@@ -1515,13 +1661,6 @@ def start_menu():
         if change_tracker.num_errors > 0:
             with open(os.path.join(ulp, "errors.log"), "a", encoding="utf-8") as ul:
                 ul.writelines(change_tracker.errors)
-    if change_tracker.has_changes(ChangeTypes.CH_TYPE_COLLISION):
-        if not os.path.exists("bkpLogs"):
-            os.mkdir("bkpLogs")
-        ulp = os.path.join("bkpLogs", str(start_dt.date()))
-        with open(os.path.join(ulp, "collisions.log"), "a", encoding="utf-8") as ul:
-            ul.writelines(f"{str(x)}\n" for x in change_tracker.typetrackers[ChangeTypes.CH_TYPE_COLLISION].changes)
-        os.system("start " + os.path.join(ulp, 'collisions.log').replace('\\', '/'))
     print("Done.")
     if modification_timestamp_db.unsaved_changes > 0:
         print(ANSIEscape.get_colored_text(f"ModTimestamp DB changes: {modification_timestamp_db.unsaved_changes}", text_color=ANSIEscape.ForegroundTextColor.cyan))
@@ -1544,6 +1683,7 @@ if __name__ == "__main__":
     ap.add_argument("-O", "--offline", help="Run in guaranteed offline mode, prevents version checks", action="store_true")
     ap.add_argument("-no", "--nooutput", help="disable interface updates", action="store_true")
     ap.add_argument("-np", "--nopause", help="disable user input requirement", action="store_true")
+    ap.add_argument("-auc", "--autoupdatecollisions", help="skip collision intervention requirement and update to latest on collision", action="store_true")
     ap.add_argument("-nl", "--nologs", help="disable log creation", action="store_true")
     ap.add_argument("-ncl", "--nochangelist", help="disable showing a list of changes before copying", action="store_true")
     ap.add_argument("-ve", "--verboseerrors", help="show more info on error", action="store_true")
