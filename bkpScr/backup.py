@@ -869,12 +869,12 @@ class ChangeTypes(object):
     CH_TYPE_REMOVEFOLDER = 'removef'
 
     TYPE_TO_NAME_MAP = {
-        CH_TYPE_UPDATE: "Update",
-        CH_TYPE_UPDATE_NOTS: "Update",
+        CH_TYPE_UPDATE: "Update S => B",
+        CH_TYPE_UPDATE_NOTS: "Update S <= B",
         CH_TYPE_RENAME: "Rename",
         CH_TYPE_REMOVE: "Remove",
-        CH_TYPE_CREATE: "Create",
-        CH_TYPE_CREATE_NOTS: "Create",
+        CH_TYPE_CREATE: "Create S => B",
+        CH_TYPE_CREATE_NOTS: "Create S <= B",
         CH_TYPE_FOLDER: "CreateFolder",
         CH_TYPE_REMOVEFOLDER: "RemoveFolder"
     }
