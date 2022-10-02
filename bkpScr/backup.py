@@ -745,9 +745,9 @@ class ModTimestampDB(object):
     def __init__(self, storage_path: str = "db/timestamps.json", *, autosave: bool = False):
         self.storage_rel_path = storage_path
         self.__data = dict(timestamp=0.0, files=dict())
-        self.load()
         self.changes = dict()
         self.unsaved_changes = 0
+        self.load()
         self.autosave = autosave
 
     @property
