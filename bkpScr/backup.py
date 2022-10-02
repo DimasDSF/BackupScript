@@ -526,8 +526,8 @@ def format_bytes(bytesn):
     converted = float(bytesn) / float(1024 ** exponent)
     return '%s%.2f%s' % ("-" if negative else "", converted, suffix)
 
-############################
 
+############################
 
 bkp_root = config['local_backup_root_folder']
 shift_tz = datetime.timezone(datetime.timedelta(hours=config['tz'].get('hours', 0), minutes=config['tz'].get('minutes', 0)))
@@ -1103,10 +1103,6 @@ class InstructionStorage(object):
         print(f"{cur_num}/{total_num} done. {get_progress_bar(round(cur_num/total_num , 2) * 100)}{ANSIEscape.CONTROLSYMBOL_clear_after_cursor}")
 
 
-change_tracker = ChangeTracker()
-file_instruction_list = InstructionStorage()
-modification_timestamp_db = ModTimestampDB()
-
 def del_file_or_dir(path):
     try:
         if os.path.exists(path):
@@ -1575,7 +1571,6 @@ def process():
         time.sleep(2)
 
 
-finished_init = False
 def start_menu():
     global finished_init
     clear_terminal()
@@ -1688,6 +1683,7 @@ def start_menu():
         os.system("pause")
 
 
+finished_init = False
 if __name__ == "__main__":
     ANSIEscape.ansi_escape_ready()
     ap = argparse.ArgumentParser()
@@ -1702,6 +1698,9 @@ if __name__ == "__main__":
     args = ap.parse_args()
     launch_args.update_args(args)
     try:
+        change_tracker = ChangeTracker()
+        file_instruction_list = InstructionStorage()
+        modification_timestamp_db = ModTimestampDB()
         if launch_args.args.profile:
             import cProfile
             with cProfile.Profile() as profiler:
